@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MES - Карта станций</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🏭 MES Production System</h1>
+            <div class="header-actions">
+                <nav>
+                    <a href="/">Заказы</a>
+                    <a href="/tracking" class="active">Карта станций</a>
+                </nav>
+                <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme">🌙</button>
+            </div>
+        </header>
+
+        <!-- Stations Grid -->
+        <div class="stations-grid" id="stationsGrid">
+            <!-- Stations will be rendered here -->
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="{{ url_for('static', filename='theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script>
+        (function() {
+            const API_BASE = '';
+            
+            // Station names
+            const STATION_NAMES = [
+                'Приёмка', 'Сортировка', 'Подготовка', 'Сборка', 'Пайка',
+                'Контроль', 'Тестирование', 'Упаковка', 'Маркировка', 'Отгрузка'
+            ];
+            
+            async function loadStations() {
+                const grid = document.getElementById('stationsGrid');
+                if (!grid) return;
+                
+                try {
+                    const response = await fetch(`${API_BASE}/api/stations`);
+                    const stations = await response.json();
+                    renderStations(stations);
+                } catch (error) {
+                    window.MESUtils.showToast('Ошибка загрузки станций', 'error');
+                    console.error(error);
+                }
+            }
+            
+            function renderStations(stations) {
+                const grid = document.getElementById('stationsGrid');
+                if (!grid) return;
+                
+                grid.innerHTML = stations.map(station => `
+                    <div class="station-card">
+                        <div class="station-header">
+                            <div style="display:flex;align-items:center;gap:12px;">
+                                <span class="station-number">${station.id}</span>
+                                <span class="station-name">${station.name}</span>
+                            </div>
+                        </div>
+                        ${station.order_id 
+                            ? `
+                                <div class="station-order">
+                                    <h4>${escapeHtml(station.order_number)}</h4>
+                                    <p>Товар: ${escapeHtml(station.product_code)}</p>
+                                    <p>Цвет: ${escapeHtml(station.color)}</p>
+                                    <p>Кол-во: ${station.quantity}</p>
+                                </div>
+                                ${station.id < 10 ? `
+                                    <button class="btn btn-primary btn-sm" style="width:100%" onclick="MESTracking.moveOrder(${station.order_id})">
+                                        Переместить дальше →
+                                    </button>
+                                ` : `
+                                    <button class="btn btn-success btn-sm" style="width:100%" disabled>
+                                        ✓ Завершён
+                                    </button>
+                                `}
+                            `
+                            : '<div class="station-empty">Станция свободна</div>'
+                        }
+                    </div>
+                `).join('');
+            }
+            
+            function escapeHtml(text) {
+                if (!text) return '';
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+            
+            async function moveOrder(orderId) {
+                if (!confirm('Переместить заказ на следующую станцию?')) return;
+                
+                try {
+                    const response = await fetch(`${API_BASE}/api/orders/${orderId}/move`, {
+                        method: 'POST'
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        const msg = result.message || 'Заказ перемещён';
+                        window.MESUtils.showToast(msg.includes('completed') ? 'Заказ завершён!' : msg, 'success');
+                        loadStations();
+                    } else {
+                        window.MESUtils.showToast(result.message || 'Ошибка перемещения', 'error');
+                    }
+                } catch (error) {
+                    window.MESUtils.showToast('Ошибка соединения с сервером', 'error');
+                }
+            }
+            
+            // Initialize
+            document.addEventListener('DOMContentLoaded', function() {
+                // Start auto-refresh
+                window.MESRefresh.start(loadStations, 3000);
+            });
+            
+            // Expose to global scope
+            window.MESTracking = {
+                moveOrder,
+                loadStations
+            };
+        })();
+    </script>
+</body>
+</html>
