@@ -11,8 +11,15 @@ class Controller:
         self.db = db
     
     def create_order(self, batch: str, product_code: str, color: str, quantity: int) -> Dict[str, Any]:
-        """Create a new order."""
-        return self.db.create_order(batch, product_code, color, quantity)
+        """Create multiple orders based on quantity."""
+        created_orders = self.db.create_order(batch, product_code, color, quantity)
+        
+        return {
+            'success': True,
+            'orders': created_orders,
+            'count': len(created_orders),
+            'message': f'Created {len(created_orders)} order(s)'
+        }
     
     def get_orders(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get all orders, optionally filtered by status."""

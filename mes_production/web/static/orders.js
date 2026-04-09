@@ -49,7 +49,8 @@
                 const result = await response.json();
                 
                 if (response.ok) {
-                    window.MESUtils.showToast('Заказ успешно создан', 'success');
+                    const count = result.count || 1;
+                    window.MESUtils.showToast(`Создано ${count} заказ(ов)`, 'success');
                     closeModal('createOrderModal');
                     form.reset();
                     loadOrders();

@@ -102,36 +102,41 @@ class Database:
         else:
             return f"{batch}-001"
     
-    def create_order(self, batch: str, product_code: str, color: str, quantity: int) -> Dict[str, Any]:
-        """Create a new order."""
-        order_number = self.get_next_order_number(batch)
-        created_at = datetime.now().isoformat()
+    def create_order(self, batch: str, product_code: str, color: str, quantity: int) -> List[Dict[str, Any]]:
+        """Create multiple orders based on quantity."""
+        created_orders = []
         
-        conn = self.get_connection()
-        cursor = conn.cursor()
+        for i in range(quantity):
+            order_number = self.get_next_order_number(batch)
+            created_at = datetime.now().isoformat()
+            
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO orders (batch, order_number, product_code, color, quantity, status, current_station, created_at)
+                VALUES (?, ?, ?, ?, ?, 'buffer', NULL, ?)
+            ''', (batch, order_number, product_code, color, 1, created_at))
+            
+            order_id = cursor.lastrowid
+            conn.commit()
+            conn.close()
+            
+            created_orders.append({
+                'id': order_id,
+                'batch': batch,
+                'order_number': order_number,
+                'product_code': product_code,
+                'color': color,
+                'quantity': 1,
+                'status': 'buffer',
+                'current_station': None,
+                'created_at': created_at,
+                'started_at': None,
+                'completed_at': None
+            })
         
-        cursor.execute('''
-            INSERT INTO orders (batch, order_number, product_code, color, quantity, status, current_station, created_at)
-            VALUES (?, ?, ?, ?, ?, 'buffer', NULL, ?)
-        ''', (batch, order_number, product_code, color, quantity, created_at))
-        
-        order_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        
-        return {
-            'id': order_id,
-            'batch': batch,
-            'order_number': order_number,
-            'product_code': product_code,
-            'color': color,
-            'quantity': quantity,
-            'status': 'buffer',
-            'current_station': None,
-            'created_at': created_at,
-            'started_at': None,
-            'completed_at': None
-        }
+        return created_orders
     
     def get_orders(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get all orders, optionally filtered by status."""
