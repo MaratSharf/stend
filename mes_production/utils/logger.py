@@ -9,8 +9,13 @@ from datetime import datetime
 def setup_logger(name: str, log_path: str, level: str = "INFO") -> logging.Logger:
     """Setup and return a logger instance."""
     os.makedirs(log_path, exist_ok=True)
-    
+
     logger = logging.getLogger(name)
+
+    # Prevent handler duplication on repeated calls
+    if logger.handlers:
+        return logger
+
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
     
     # File handler

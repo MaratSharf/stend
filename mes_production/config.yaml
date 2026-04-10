@@ -14,6 +14,9 @@ stations:
   - Упаковка
   - Маркировка
   - Отгрузка
+auth:
+  api_keys:
+    - change-me-to-a-secure-key
 logging:
   level: INFO
   path: data/logs

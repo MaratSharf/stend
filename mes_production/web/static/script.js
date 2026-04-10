@@ -3,6 +3,22 @@
 (function() {
     const API_BASE = '';
     
+    // Get API key from meta tag (set by server template)
+    function getApiKey() {
+        const meta = document.querySelector('meta[name="api-key"]');
+        return meta ? meta.content : null;
+    }
+    
+    // Build headers for API requests
+    function authHeaders(extraHeaders = {}) {
+        const headers = { ...extraHeaders };
+        const apiKey = getApiKey();
+        if (apiKey) {
+            headers['X-API-Key'] = apiKey;
+        }
+        return headers;
+    }
+    
     // Utility functions
     function showToast(message, type = 'info') {
         const container = document.getElementById('toastContainer');
@@ -59,7 +75,9 @@
         showToast,
         formatDate,
         getStatusBadge,
-        getStationName
+        getStationName,
+        getApiKey,
+        authHeaders
     };
     
     // Auto-refresh functionality

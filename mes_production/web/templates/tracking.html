@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% if api_key %}
+    <meta name="api-key" content="{{ api_key }}">
+    {% endif %}
     <title>MES - Карта станций</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
@@ -102,7 +105,8 @@
                 
                 try {
                     const response = await fetch(`${API_BASE}/api/orders/${orderId}/move`, {
-                        method: 'POST'
+                        method: 'POST',
+                        headers: window.MESUtils.authHeaders()
                     });
                     
                     const result = await response.json();

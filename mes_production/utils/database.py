@@ -17,6 +17,8 @@ class Database:
     def get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        # Enable foreign key constraints
+        conn.execute("PRAGMA foreign_keys = ON")
         return conn
     
     def init_db(self):
@@ -164,169 +166,189 @@ class Database:
         return dict(row) if row else None
     
     def launch_order(self, order_id: int) -> bool:
-        """Launch an order to station 1."""
+        """Launch an order to station 1. Uses transaction with rollback."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
-        # Check if station 1 is free
-        cursor.execute('SELECT order_id FROM stations WHERE id = 1')
-        row = cursor.fetchone()
-        
-        if row and row['order_id'] is not None:
-            conn.close()
+
+        try:
+            # Check if station 1 is free
+            cursor.execute('SELECT order_id FROM stations WHERE id = 1')
+            row = cursor.fetchone()
+
+            if row and row['order_id'] is not None:
+                conn.close()
+                return False
+
+            started_at = datetime.now().isoformat()
+
+            cursor.execute('''
+                UPDATE orders
+                SET status = 'production', current_station = 1, started_at = ?
+                WHERE id = ? AND status = 'buffer'
+            ''', (started_at, order_id))
+
+            if cursor.rowcount == 0:
+                conn.close()
+                return False
+
+            # Assign order to station 1
+            cursor.execute('''
+                UPDATE stations SET order_id = ? WHERE id = 1
+            ''', (order_id,))
+
+            # Log entry
+            cursor.execute('''
+                INSERT INTO station_log (order_id, station_id, entered_at, result)
+                VALUES (?, ?, ?, 'OK')
+            ''', (order_id, 1, started_at))
+
+            conn.commit()
+            return True
+        except Exception:
+            conn.rollback()
             return False
-        
-        started_at = datetime.now().isoformat()
-        
-        cursor.execute('''
-            UPDATE orders 
-            SET status = 'production', current_station = 1, started_at = ?
-            WHERE id = ? AND status = 'buffer'
-        ''', (started_at, order_id))
-        
-        if cursor.rowcount == 0:
+        finally:
             conn.close()
-            return False
-        
-        # Assign order to station 1
-        cursor.execute('''
-            UPDATE stations SET order_id = ? WHERE id = 1
-        ''', (order_id,))
-        
-        # Log entry
-        cursor.execute('''
-            INSERT INTO station_log (order_id, station_id, entered_at, result)
-            VALUES (?, ?, ?, 'OK')
-        ''', (order_id, 1, started_at))
-        
-        conn.commit()
-        conn.close()
-        return True
-    
+
     def move_order(self, order_id: int) -> bool:
-        """Move order to next station."""
+        """Move order to next station. Uses transaction with rollback."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         order = self.get_order(order_id)
         if not order or order['status'] != 'production':
             conn.close()
             return False
-        
+
         current_station = order['current_station']
         if current_station is None or current_station >= 10:
             conn.close()
             return False
-        
+
         next_station = current_station + 1
-        
+
         # Check if next station is free
         cursor.execute('SELECT order_id FROM stations WHERE id = ?', (next_station,))
         row = cursor.fetchone()
-        
+
         if row and row['order_id'] is not None:
             conn.close()
             return False
-        
-        exited_at = datetime.now().isoformat()
-        
-        # Update log for current station
-        cursor.execute('''
-            UPDATE station_log 
-            SET exited_at = ?, result = 'OK'
-            WHERE order_id = ? AND station_id = ? AND exited_at IS NULL
-        ''', (exited_at, order_id, current_station))
-        
-        # Free current station
-        cursor.execute('''
-            UPDATE stations SET order_id = NULL WHERE id = ?
-        ''', (current_station,))
-        
-        # Assign to next station
-        cursor.execute('''
-            UPDATE stations SET order_id = ? WHERE id = ?
-        ''', (order_id, next_station))
-        
-        # Update order
-        cursor.execute('''
-            UPDATE orders SET current_station = ? WHERE id = ?
-        ''', (next_station, order_id))
-        
-        # Log entry to next station
-        entered_at = datetime.now().isoformat()
-        cursor.execute('''
-            INSERT INTO station_log (order_id, station_id, entered_at, result)
-            VALUES (?, ?, ?, 'OK')
-        ''', (order_id, next_station, entered_at))
-        
-        conn.commit()
-        conn.close()
-        return True
-    
+
+        try:
+            exited_at = datetime.now().isoformat()
+
+            # Update log for current station
+            cursor.execute('''
+                UPDATE station_log
+                SET exited_at = ?, result = 'OK'
+                WHERE order_id = ? AND station_id = ? AND exited_at IS NULL
+            ''', (exited_at, order_id, current_station))
+
+            # Free current station
+            cursor.execute('''
+                UPDATE stations SET order_id = NULL WHERE id = ?
+            ''', (current_station,))
+
+            # Assign to next station
+            cursor.execute('''
+                UPDATE stations SET order_id = ? WHERE id = ?
+            ''', (order_id, next_station))
+
+            # Update order
+            cursor.execute('''
+                UPDATE orders SET current_station = ? WHERE id = ?
+            ''', (next_station, order_id))
+
+            # Log entry to next station
+            entered_at = datetime.now().isoformat()
+            cursor.execute('''
+                INSERT INTO station_log (order_id, station_id, entered_at, result)
+                VALUES (?, ?, ?, 'OK')
+            ''', (order_id, next_station, entered_at))
+
+            conn.commit()
+            return True
+        except Exception:
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
     def complete_order(self, order_id: int) -> bool:
-        """Complete an order (mark as completed)."""
+        """Complete an order (mark as completed). Uses transaction with rollback."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         order = self.get_order(order_id)
         if not order or order['status'] != 'production':
             conn.close()
             return False
-        
+
         completed_at = datetime.now().isoformat()
         current_station = order['current_station']
-        
-        # Update order status
-        cursor.execute('''
-            UPDATE orders 
-            SET status = 'completed', current_station = NULL, completed_at = ?
-            WHERE id = ?
-        ''', (completed_at, order_id))
-        
-        # Free current station if any
-        if current_station:
+
+        try:
+            # Update order status
             cursor.execute('''
-                UPDATE stations SET order_id = NULL WHERE id = ?
-            ''', (current_station,))
-            
-            # Update log
-            cursor.execute('''
-                UPDATE station_log 
-                SET exited_at = ?, result = 'OK'
-                WHERE order_id = ? AND station_id = ? AND exited_at IS NULL
-            ''', (completed_at, order_id, current_station))
-        
-        conn.commit()
-        conn.close()
-        return True
-    
+                UPDATE orders
+                SET status = 'completed', current_station = NULL, completed_at = ?
+                WHERE id = ?
+            ''', (completed_at, order_id))
+
+            # Free current station if any
+            if current_station:
+                cursor.execute('''
+                    UPDATE stations SET order_id = NULL WHERE id = ?
+                ''', (current_station,))
+
+                # Update log
+                cursor.execute('''
+                    UPDATE station_log
+                    SET exited_at = ?, result = 'OK'
+                    WHERE order_id = ? AND station_id = ? AND exited_at IS NULL
+                ''', (completed_at, order_id, current_station))
+
+            conn.commit()
+            return True
+        except Exception:
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
     def cancel_order(self, order_id: int) -> bool:
-        """Cancel an order."""
+        """Cancel an order. Uses transaction with rollback."""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         order = self.get_order(order_id)
         if not order or order['status'] in ('completed', 'cancelled'):
             conn.close()
             return False
-        
+
         current_station = order['current_station']
-        
-        # Update order status
-        cursor.execute('''
-            UPDATE orders SET status = 'cancelled', current_station = NULL
-            WHERE id = ?
-        ''', (order_id,))
-        
-        # Free current station if any
-        if current_station:
+
+        try:
+            # Update order status
             cursor.execute('''
-                UPDATE stations SET order_id = NULL WHERE id = ?
-            ''', (current_station,))
-        
-        conn.commit()
-        conn.close()
-        return True
+                UPDATE orders SET status = 'cancelled', current_station = NULL
+                WHERE id = ?
+            ''', (order_id,))
+
+            # Free current station if any
+            if current_station:
+                cursor.execute('''
+                    UPDATE stations SET order_id = NULL WHERE id = ?
+                ''', (current_station,))
+
+            conn.commit()
+            return True
+        except Exception:
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
     
     def get_stations(self) -> List[Dict[str, Any]]:
         """Get all stations with their current orders."""

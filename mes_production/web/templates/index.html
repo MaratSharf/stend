@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {% if api_key %}
+    <meta name="api-key" content="{{ api_key }}">
+    {% endif %}
     <title>MES - Производственная система</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>

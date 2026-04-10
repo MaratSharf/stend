@@ -42,7 +42,7 @@
             try {
                 const response = await fetch(`${API_BASE}/api/orders`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: window.MESUtils.authHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify(data)
                 });
                 
@@ -70,7 +70,7 @@
         if (!tableBody) return;
         
         try {
-            const url = currentFilter === 'all' 
+            const url = currentFilter === 'all'
                 ? `${API_BASE}/api/orders`
                 : `${API_BASE}/api/orders?status=${currentFilter}`;
             
@@ -175,7 +175,8 @@
         
         try {
             const response = await fetch(`${API_BASE}/api/orders/${orderId}/launch`, {
-                method: 'POST'
+                method: 'POST',
+                headers: window.MESUtils.authHeaders()
             });
             
             const result = await response.json();
@@ -196,7 +197,8 @@
         
         try {
             const response = await fetch(`${API_BASE}/api/orders/${orderId}/move`, {
-                method: 'POST'
+                method: 'POST',
+                headers: window.MESUtils.authHeaders()
             });
             
             const result = await response.json();
@@ -217,7 +219,8 @@
         
         try {
             const response = await fetch(`${API_BASE}/api/orders/${orderId}/complete`, {
-                method: 'POST'
+                method: 'POST',
+                headers: window.MESUtils.authHeaders()
             });
             
             const result = await response.json();
@@ -238,7 +241,8 @@
         
         try {
             const response = await fetch(`${API_BASE}/api/orders/${orderId}/cancel`, {
-                method: 'POST'
+                method: 'POST',
+                headers: window.MESUtils.authHeaders()
             });
             
             const result = await response.json();
