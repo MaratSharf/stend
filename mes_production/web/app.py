@@ -84,7 +84,7 @@ def create_app(config: dict = None) -> Flask:
     @app.route('/api/orders', methods=['POST'])
     @require_api_key
     def api_create_order():
-        """Create a new order."""
+        """Create one or multiple orders."""
         data = request.get_json()
 
         if not data:
@@ -92,19 +92,22 @@ def create_app(config: dict = None) -> Flask:
 
         batch = data.get('batch')
         product_code = data.get('product_code')
-        color = data.get('color')
-        quantity = data.get('quantity')
+        color = data.get('color', '')
+        count = data.get('quantity')
 
-        if not all([batch, product_code, color, quantity]):
+        if not all([batch, product_code, count]):
             return jsonify({'error': 'Missing required fields'}), 400
 
         try:
-            quantity = int(quantity)
+            count = int(count)
         except (ValueError, TypeError):
             return jsonify({'error': 'Quantity must be a number'}), 400
 
-        order = controller.create_order(batch, product_code, color, quantity)
-        return jsonify(order), 201
+        if count < 1:
+            return jsonify({'error': 'Quantity must be at least 1'}), 400
+
+        result = controller.create_order(batch, product_code, color, count)
+        return jsonify(result), 201
 
     @app.route('/api/orders/<int:order_id>/launch', methods=['POST'])
     @require_api_key

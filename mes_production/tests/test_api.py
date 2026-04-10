@@ -14,25 +14,42 @@ class TestGetOrders:
     def test_filter_by_status(self, auth_client, client):
         auth_client.post('/api/orders', json={
             'batch': 'B1', 'product_code': 'P1',
-            'color': 'R', 'quantity': 10
+            'color': 'R', 'quantity': 2
         })
         resp = client.get('/api/orders?status=buffer')
         assert resp.status_code == 200
-        assert len(resp.get_json()) == 1
+        assert len(resp.get_json()) == 2
 
 
 class TestCreateOrder:
-    def test_create_valid_order(self, auth_client):
+    def test_create_single_order(self, auth_client):
         resp = auth_client.post('/api/orders', json={
             'batch': 'BATCH-1',
             'product_code': 'PROD-42',
             'color': 'Blue',
-            'quantity': 100
+            'quantity': 1
         })
         assert resp.status_code == 201
         data = resp.get_json()
-        assert data['batch'] == 'BATCH-1'
-        assert data['status'] == 'buffer'
+        assert data['count'] == 1
+        assert len(data['orders']) == 1
+        assert data['orders'][0]['batch'] == 'BATCH-1'
+        assert data['orders'][0]['status'] == 'buffer'
+
+    def test_create_multiple_orders(self, auth_client):
+        resp = auth_client.post('/api/orders', json={
+            'batch': 'BATCH-2',
+            'product_code': 'PROD-43',
+            'color': 'Red',
+            'quantity': 3
+        })
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data['count'] == 3
+        assert len(data['orders']) == 3
+        for order in data['orders']:
+            assert order['batch'] == 'BATCH-2'
+            assert order['quantity'] == 1
 
     def test_create_order_missing_fields(self, auth_client):
         resp = auth_client.post('/api/orders', json={'batch': 'B1'})
@@ -68,9 +85,9 @@ class TestLaunchOrder:
     def test_launch_success(self, auth_client):
         order_resp = auth_client.post('/api/orders', json={
             'batch': 'B1', 'product_code': 'P1',
-            'color': 'R', 'quantity': 10
+            'color': 'R', 'quantity': 1
         })
-        order_id = order_resp.get_json()['id']
+        order_id = order_resp.get_json()['orders'][0]['id']
 
         resp = auth_client.post(f'/api/orders/{order_id}/launch')
         assert resp.status_code == 200
@@ -90,9 +107,9 @@ class TestMoveOrder:
     def test_move_success(self, auth_client):
         order_resp = auth_client.post('/api/orders', json={
             'batch': 'B1', 'product_code': 'P1',
-            'color': 'R', 'quantity': 10
+            'color': 'R', 'quantity': 1
         })
-        order_id = order_resp.get_json()['id']
+        order_id = order_resp.get_json()['orders'][0]['id']
         auth_client.post(f'/api/orders/{order_id}/launch')
 
         resp = auth_client.post(f'/api/orders/{order_id}/move')
@@ -108,9 +125,9 @@ class TestCompleteOrder:
     def test_complete_success(self, auth_client):
         order_resp = auth_client.post('/api/orders', json={
             'batch': 'B1', 'product_code': 'P1',
-            'color': 'R', 'quantity': 10
+            'color': 'R', 'quantity': 1
         })
-        order_id = order_resp.get_json()['id']
+        order_id = order_resp.get_json()['orders'][0]['id']
         auth_client.post(f'/api/orders/{order_id}/launch')
 
         resp = auth_client.post(f'/api/orders/{order_id}/complete')
@@ -126,9 +143,9 @@ class TestCancelOrder:
     def test_cancel_success(self, auth_client):
         order_resp = auth_client.post('/api/orders', json={
             'batch': 'B1', 'product_code': 'P1',
-            'color': 'R', 'quantity': 10
+            'color': 'R', 'quantity': 1
         })
-        order_id = order_resp.get_json()['id']
+        order_id = order_resp.get_json()['orders'][0]['id']
 
         resp = auth_client.post(f'/api/orders/{order_id}/cancel')
         assert resp.status_code == 200
@@ -160,7 +177,7 @@ class TestStatistics:
             'color': 'R', 'quantity': 5
         })
         resp = client.get('/api/statistics')
-        assert resp.get_json()['total'] == 1
+        assert resp.get_json()['total'] == 5
 
 
 class TestPageRoutes:

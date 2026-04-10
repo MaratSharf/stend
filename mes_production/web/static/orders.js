@@ -25,34 +25,39 @@
     function setupCreateOrderForm() {
         const form = document.getElementById('createOrderForm');
         const modal = document.getElementById('createOrderModal');
-        
+
         if (!form || !modal) return;
-        
+
         form.addEventListener('submit', async function(e) {
             e.preventDefault();
-            
+
             const formData = new FormData(form);
             const data = {
                 batch: formData.get('batch'),
                 product_code: formData.get('product_code'),
-                color: formData.get('color'),
+                color: formData.get('color') || '',
                 quantity: parseInt(formData.get('quantity'))
             };
-            
+
             try {
                 const response = await fetch(`${API_BASE}/api/orders`, {
                     method: 'POST',
                     headers: window.MESUtils.authHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify(data)
                 });
-                
+
                 const result = await response.json();
-                
+
                 if (response.ok) {
-                    const count = result.count || 1;
-                    window.MESUtils.showToast(`Создано ${count} заказ(ов)`, 'success');
+                    const count = result.count || 0;
+                    if (count === 1) {
+                        window.MESUtils.showToast('Заказ создан', 'success');
+                    } else {
+                        window.MESUtils.showToast(`Создано ${count} заказов для партии '${data.batch}'`, 'success');
+                    }
                     closeModal('createOrderModal');
                     form.reset();
+                    document.getElementById('quantity').value = '1';
                     loadOrders();
                 } else {
                     window.MESUtils.showToast(result.error || 'Ошибка создания заказа', 'error');
