@@ -4,8 +4,6 @@ Handles SQLite database operations for orders, stations, and station logs.
 """
 import sqlite3
 import os
-import time
-import random
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -87,10 +85,14 @@ class Database:
         conn.close()
     
     def get_next_order_number(self, batch: str) -> str:
-        """Generate unique order number: ORD-<timestamp-last4>-<random-3digits>"""
-        timestamp_last4 = str(int(time.time() * 1000))[-4:]
-        random_digits = random.randint(0, 999)
-        return f"ORD-{timestamp_last4}-{random_digits:03d}"
+        """Generate sequential order number: ORD-<4-digit-sequential>"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT MAX(id) FROM orders')
+        row = cursor.fetchone()
+        conn.close()
+        next_id = (row[0] or 0) + 1
+        return f"ORD-{next_id:04d}"
     
     def create_order(self, batch: str, product_code: str, color: str, quantity: int) -> List[Dict[str, Any]]:
         """Create multiple orders based on quantity."""

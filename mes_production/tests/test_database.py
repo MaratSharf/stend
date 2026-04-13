@@ -2,7 +2,6 @@
 Tests for the Database module.
 """
 import re
-import time
 from utils.database import Database
 
 
@@ -28,17 +27,17 @@ class TestDatabaseInit:
 class TestOrderNumberFormat:
     def test_format_matches_ord_pattern(self, db):
         order_number = db.get_next_order_number("TEST")
-        # Should match ORD-XXXX-XXX pattern
-        assert re.match(r'^ORD-\d{4}-\d{3}$', order_number), f"Invalid format: {order_number}"
+        # Should match ORD-NNNN sequential pattern
+        assert re.match(r'^ORD-\d{4,}$', order_number), f"Invalid format: {order_number}"
 
-    def test_multiple_orders_have_unique_numbers(self, db):
-        numbers = set()
-        for _ in range(20):
-            num = db.get_next_order_number("TEST")
-            numbers.add(num)
-            time.sleep(0.001)  # Small delay to ensure timestamp changes
-        # With timestamp + random, should be unique
-        assert len(numbers) == 20
+    def test_multiple_orders_have_sequential_numbers(self, controller):
+        # Create 5 orders and check they get sequential numbers
+        result = controller.create_order("BATCH-TEST", "PROD-X", "Black", 5)
+        orders = result['orders']
+        numbers = [o['order_number'] for o in orders]
+        # Sequential numbers should increment
+        expected = ['ORD-0001', 'ORD-0002', 'ORD-0003', 'ORD-0004', 'ORD-0005']
+        assert numbers == expected
 
 
 class TestCreateOrder:
@@ -53,7 +52,7 @@ class TestCreateOrder:
             assert order['quantity'] == 1
             assert order['status'] == 'buffer'
             assert order['current_station'] is None
-            assert re.match(r'^ORD-\d{4}-\d{3}$', order['order_number'])
+            assert re.match(r'^ORD-\d{4,}$', order['order_number'])
 
     def test_single_order_creation(self, controller):
         result = controller.create_order("BATCH-B", "PROD-2", "Blue", 1)

@@ -10,8 +10,11 @@ import yaml
 import os
 
 
-def load_config(config_path: str = 'config.yaml') -> dict:
+def load_config(config_path: str = None) -> dict:
     """Load configuration from YAML file."""
+    if config_path is None:
+        # Default to config.yaml in the project root (parent of web/)
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config.yaml')
     with open(config_path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
 
