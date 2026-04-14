@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MES — Пользователи</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🏭 MES Production System</h1>
+            <div class="header-actions">
+                <nav>
+                    <a href="/">Заказы</a>
+                    <a href="/tracking">Карта станций</a>
+                    <a href="/station">Станция</a>
+                    <a href="/users" class="active">Пользователи</a>
+                </nav>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="font-size:0.85rem;color:var(--text-secondary);">
+                        {{ user.username }} ({{ user.role_label }})
+                    </span>
+                    <a href="/logout" class="btn btn-sm btn-secondary">Выйти</a>
+                    <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme">🌙</button>
+                </div>
+            </div>
+        </header>
+
+        <div class="filter-section">
+            <button class="btn btn-primary" onclick="MESUsers.openCreateModal()">
+                + Добавить пользователя
+            </button>
+        </div>
+
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Логин</th>
+                        <th>Роль</th>
+                        <th>Активен</th>
+                        <th>Создан</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody id="usersTableBody">
+                    {% for u in users %}
+                    <tr>
+                        <td>{{ u.id }}</td>
+                        <td>{{ u.username }}</td>
+                        <td>{{ u.role }}</td>
+                        <td>{{ '✅' if u.is_active else '❌' }}</td>
+                        <td>{{ u.created_at[:19] if u.created_at else '-' }}</td>
+                        <td class="action-buttons">
+                            <button class="btn btn-sm btn-secondary" onclick="MESUsers.editUser({{ u.id }}, '{{ u.username }}', '{{ u.role }}', {{ u.is_active|lower }})">
+                                Редактировать
+                            </button>
+                            {% if u.id != current_user.id %}
+                            <button class="btn btn-sm btn-danger" onclick="MESUsers.deleteUser({{ u.id }}, '{{ u.username }}')">
+                                Удалить
+                            </button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Edit/Create Modal -->
+    <div class="modal-overlay" id="editUserModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="modalTitle">Редактировать пользователя</h2>
+                <button class="modal-close" onclick="MESUsers.closeModal()">&times;</button>
+            </div>
+            <form id="editUserForm">
+                <input type="hidden" id="editUserId">
+                <div class="form-group">
+                    <label for="editUsername">Логин</label>
+                    <input type="text" id="editUsername" required readonly style="opacity:0.6;">
+                </div>
+                <div class="form-group">
+                    <label for="editPassword">Новый пароль (оставьте пустым, чтобы не менять)</label>
+                    <input type="password" id="editPassword" placeholder="••••••••">
+                </div>
+                <div class="form-group">
+                    <label for="editRole">Роль</label>
+                    <select id="editRole" class="form-group" style="width:100%;padding:10px 12px;border:1px solid var(--border-color);border-radius:6px;background-color:var(--bg-secondary);color:var(--text-primary);font-size:0.95rem;">
+                        <option value="viewer">Наблюдатель</option>
+                        <option value="operator">Оператор</option>
+                        <option value="admin">Администратор</option>
+                    </select>
+                </div>
+                <div class="form-group" style="display:flex;align-items:center;gap:8px;">
+                    <input type="checkbox" id="editActive" checked>
+                    <label for="editActive" style="margin:0;">Активен</label>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="MESUsers.closeModal()">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Create Modal (same form, different title) -->
+    <div class="modal-overlay" id="createUserModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Новый пользователь</h2>
+                <button class="modal-close" onclick="MESUsers.closeCreateModal()">&times;</button>
+            </div>
+            <form id="createUserForm">
+                <div class="form-group">
+                    <label for="createUsername">Логин</label>
+                    <input type="text" id="createUsername" required>
+                </div>
+                <div class="form-group">
+                    <label for="createPassword">Пароль</label>
+                    <input type="password" id="createPassword" required>
+                </div>
+                <div class="form-group">
+                    <label for="createRole">Роль</label>
+                    <select id="createRole" style="width:100%;padding:10px 12px;border:1px solid var(--border-color);border-radius:6px;background-color:var(--bg-secondary);color:var(--text-primary);font-size:0.95rem;">
+                        <option value="viewer">Наблюдатель</option>
+                        <option value="operator">Оператор</option>
+                        <option value="admin">Администратор</option>
+                    </select>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="MESUsers.closeCreateModal()">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Создать</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="{{ url_for('static', filename='theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script>
+        (function () {
+            'use strict';
+
+            window.MESUsers = {};
+
+            function showToast(msg, type) {
+                if (MESUtils.showToast) {
+                    MESUtils.showToast(msg, type || 'info');
+                }
+            }
+
+            function authHeaders() {
+                return MESUtils.authHeaders({ 'Content-Type': 'application/json' });
+            }
+
+            /* ── Edit modal ─────────────────────────────── */
+
+            window.MESUsers.openCreateModal = function () {
+                document.getElementById('createUserModal').classList.add('active');
+            };
+
+            window.MESUsers.closeCreateModal = function () {
+                document.getElementById('createUserModal').classList.remove('active');
+            };
+
+            window.MESUsers.editUser = function (id, username, role, active) {
+                document.getElementById('editUserId').value = id;
+                document.getElementById('editUsername').value = username;
+                document.getElementById('editPassword').value = '';
+                document.getElementById('editRole').value = role;
+                document.getElementById('editActive').checked = active;
+                document.getElementById('editUserModal').classList.add('active');
+            };
+
+            window.MESUsers.closeModal = function () {
+                document.getElementById('editUserModal').classList.remove('active');
+            };
+
+            /* ── Edit form submit ────────────────────────── */
+
+            document.getElementById('editUserForm').addEventListener('submit', function (e) {
+                e.preventDefault();
+                var id = document.getElementById('editUserId').value;
+                var body = {
+                    role: document.getElementById('editRole').value,
+                    is_active: document.getElementById('editActive').checked
+                };
+                var pw = document.getElementById('editPassword').value;
+                if (pw) body.password = pw;
+
+                fetch('/api/users/' + id, {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify(body)
+                })
+                .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+                .then(function (res) {
+                    if (res.ok) {
+                        showToast('Пользователь обновлён', 'success');
+                        setTimeout(function () { location.reload(); }, 800);
+                    } else {
+                        showToast(res.data.error || 'Ошибка', 'error');
+                    }
+                })
+                .catch(function () { showToast('Ошибка соединения', 'error'); });
+            });
+
+            /* ── Create form submit ──────────────────────── */
+
+            document.getElementById('createUserForm').addEventListener('submit', function (e) {
+                e.preventDefault();
+                var body = {
+                    username: document.getElementById('createUsername').value,
+                    password: document.getElementById('createPassword').value,
+                    role: document.getElementById('createRole').value
+                };
+
+                fetch('/api/users', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify(body)
+                })
+                .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+                .then(function (res) {
+                    if (res.ok) {
+                        showToast('Пользователь создан', 'success');
+                        setTimeout(function () { location.reload(); }, 800);
+                    } else {
+                        showToast(res.data.error || 'Ошибка', 'error');
+                    }
+                })
+                .catch(function () { showToast('Ошибка соединения', 'error'); });
+            });
+
+            /* ── Delete ──────────────────────────────────── */
+
+            window.MESUsers.deleteUser = function (id, username) {
+                if (!confirm('Удалить пользователя ' + username + '?')) return;
+                fetch('/api/users/' + id, {
+                    method: 'DELETE',
+                    headers: authHeaders()
+                })
+                .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+                .then(function (res) {
+                    if (res.ok) {
+                        showToast('Пользователь удалён', 'success');
+                        setTimeout(function () { location.reload(); }, 800);
+                    } else {
+                        showToast(res.data.error || 'Ошибка', 'error');
+                    }
+                })
+                .catch(function () { showToast('Ошибка соединения', 'error'); });
+            };
+        })();
+    </script>
+</body>
+</html>

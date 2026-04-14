@@ -44,18 +44,20 @@ class Controller:
         """Move order to next station."""
         success = self.db.move_order(order_id)
         order = self.db.get_order(order_id)
-        
-        # Check if order completed all stations
-        if success and order and order['current_station'] == 10:
-            # Auto-complete when reaching station 10
-            self.db.complete_order(order_id)
-            order = self.db.get_order(order_id)
-            return {
-                'success': True,
-                'order': order,
-                'message': 'Order moved to station 10 and completed automatically'
-            }
-        
+
+        # Check if order completed all stations (reached last station)
+        if success and order and order['current_station'] is not None:
+            last_id = self.db._last_station_id()
+            if order['current_station'] == last_id:
+                # Auto-complete when reaching last station
+                self.db.complete_order(order_id)
+                order = self.db.get_order(order_id)
+                return {
+                    'success': True,
+                    'order': order,
+                    'message': f'Order moved to final station and completed automatically'
+                }
+
         return {
             'success': success,
             'order': order,

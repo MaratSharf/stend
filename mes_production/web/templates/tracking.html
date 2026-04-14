@@ -7,7 +7,7 @@
     <meta name="api-key" content="{{ api_key }}">
     {% endif %}
     <title>MES - Карта станций</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=4">
 </head>
 <body>
     <div class="container">
@@ -17,14 +17,34 @@
                 <nav>
                     <a href="/">Заказы</a>
                     <a href="/tracking" class="active">Карта станций</a>
+                    <a href="/station">Станция</a>
+                    <a href="/map">Производство</a>
+                    {% if user and user.role == 'admin' %}
+                    <a href="/users">Пользователи</a>
+                    {% endif %}
                 </nav>
-                <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme">🌙</button>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="font-size:0.85rem;color:var(--text-secondary);">
+                        {{ user.username }} ({{ user.role_label }})
+                    </span>
+                    <a href="/logout" class="btn btn-sm btn-secondary">Выйти</a>
+                    <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme">🌙</button>
+                </div>
             </div>
         </header>
 
         <!-- Stations Grid -->
-        <div class="stations-grid" id="stationsGrid">
-            <!-- Stations will be rendered here -->
+        <div class="stations-grid" id="stationsGrid"></div>
+
+        <!-- Order Detail Modal -->
+        <div class="modal-overlay" id="orderModal">
+            <div class="modal">
+                <div class="modal-header">
+                    <h2 id="modalTitle">Заказы на станции</h2>
+                    <button class="modal-close" onclick="window.MESTracking.closeModal()">&times;</button>
+                </div>
+                <div id="modalBody"></div>
+            </div>
         </div>
     </div>
 
@@ -36,81 +56,150 @@
     <script>
         (function() {
             const API_BASE = '';
-            
-            // Station names
-            const STATION_NAMES = [
-                'Приёмка', 'Сортировка', 'Подготовка', 'Сборка', 'Пайка',
-                'Контроль', 'Тестирование', 'Упаковка', 'Маркировка', 'Отгрузка'
-            ];
-            
-            async function loadStations() {
-                const grid = document.getElementById('stationsGrid');
-                if (!grid) return;
-                
-                try {
-                    const response = await fetch(`${API_BASE}/api/stations`);
-                    const stations = await response.json();
-                    renderStations(stations);
-                } catch (error) {
-                    window.MESUtils.showToast('Ошибка загрузки станций', 'error');
-                    console.error(error);
-                }
-            }
-            
-            function renderStations(stations) {
-                const grid = document.getElementById('stationsGrid');
-                if (!grid) return;
-                
-                grid.innerHTML = stations.map(station => `
-                    <div class="station-card">
-                        <div class="station-header">
-                            <div style="display:flex;align-items:center;gap:12px;">
-                                <span class="station-number">${station.id}</span>
-                                <span class="station-name">${station.name}</span>
-                            </div>
-                        </div>
-                        ${station.order_id 
-                            ? `
-                                <div class="station-order">
-                                    <h4>${escapeHtml(station.order_number)}</h4>
-                                    <p>Товар: ${escapeHtml(station.product_code)}</p>
-                                    <p>Цвет: ${escapeHtml(station.color)}</p>
-                                    <p>Кол-во: ${station.quantity}</p>
-                                </div>
-                                ${station.id < 10 ? `
-                                    <button class="btn btn-primary btn-sm" style="width:100%" onclick="MESTracking.moveOrder(${station.order_id})">
-                                        Переместить дальше →
-                                    </button>
-                                ` : `
-                                    <button class="btn btn-success btn-sm" style="width:100%" disabled>
-                                        ✓ Завершён
-                                    </button>
-                                `}
-                            `
-                            : '<div class="station-empty">Станция свободна</div>'
-                        }
-                    </div>
-                `).join('');
-            }
-            
+            var _lastStationId = 0;
+            var _ordersByStation = {};
+
+            // Initialize the global namespace FIRST
+            window.MESTracking = {};
+
             function escapeHtml(text) {
                 if (!text) return '';
-                const div = document.createElement('div');
+                var div = document.createElement('div');
                 div.textContent = text;
                 return div.innerHTML;
             }
-            
+
+            /* ── Load stations ────────────────────────────── */
+
+            function loadStations() {
+                var grid = document.getElementById('stationsGrid');
+                if (!grid) return;
+
+                fetch(API_BASE + '/api/stations')
+                    .then(function(r) { return r.json(); })
+                    .then(function(stations) { renderStations(stations); })
+                    .catch(function(err) {
+                        window.MESUtils.showToast('Ошибка загрузки станций', 'error');
+                        console.error(err);
+                    });
+            }
+
+            function renderStations(stations) {
+                var grid = document.getElementById('stationsGrid');
+                if (!grid) return;
+
+                _lastStationId = stations.reduce(function(max, s) { return Math.max(max, s.id); }, 0);
+                _ordersByStation = {};
+                stations.forEach(function(s) {
+                    _ordersByStation[s.id] = s.orders || [];
+                });
+
+                // Group: main + subs
+                var groups = [];
+                stations.forEach(function(s) {
+                    if (s.id === Math.floor(s.id)) groups.push({ main: s, subs: [] });
+                });
+                stations.forEach(function(s) {
+                    if (s.id !== Math.floor(s.id)) {
+                        var parent = Math.floor(s.id);
+                        for (var i = 0; i < groups.length; i++) {
+                            if (groups[i].main.id === parent) { groups[i].subs.push(s); break; }
+                        }
+                    }
+                });
+                groups.forEach(function(g) { g.subs.sort(function(a, b) { return a.id - b.id; }); });
+
+                var html = '';
+                groups.forEach(function(group) {
+                    var main = group.main;
+                    var mainCount = (main.orders || []).length;
+                    var subCount = group.subs.reduce(function(sum, s) { return sum + (s.orders || []).length; }, 0);
+                    var totalCount = mainCount + subCount;
+
+                    // Main station card
+                    html += '<div class="station-card station-group clickable" onclick="window.MESTracking.openModal(' + main.id + ')">' +
+                        '<div class="station-header">' +
+                        '<div style="display:flex;align-items:center;gap:12px;">' +
+                        '<span class="station-number" style="width:44px;height:44px;font-size:1.2rem;">' + Math.floor(main.id) + '</span>' +
+                        '<div>' +
+                        '<div class="station-name">' + escapeHtml(main.name) + '</div>' +
+                        '<div style="font-size:0.75rem;color:var(--text-secondary);margin-top:2px;">' + totalCount + ' заказ(ов)</div>' +
+                        '</div></div></div></div>';
+
+                    // Sub-station cards
+                    group.subs.forEach(function(sub) {
+                        var sCount = (sub.orders || []).length;
+                        html += '<div class="station-card station-group station-sub clickable" onclick="window.MESTracking.openModal(' + sub.id + ')">' +
+                            '<div class="station-header sub-header">' +
+                            '<div style="display:flex;align-items:center;gap:12px;">' +
+                            '<span class="station-number station-number-sub" style="width:32px;height:32px;font-size:0.85rem;">' + String(sub.id) + '</span>' +
+                            '<div>' +
+                            '<div class="station-name">' + escapeHtml(sub.name) + '</div>' +
+                            '<div style="font-size:0.75rem;color:var(--text-secondary);margin-top:2px;">' + sCount + ' заказ(ов)</div>' +
+                            '</div></div></div></div>';
+                    });
+                });
+
+                grid.innerHTML = html;
+            }
+
+            /* ── Modal ────────────────────────────────────── */
+
+            window.MESTracking.openModal = function(stationId) {
+                var orders = _ordersByStation[stationId] || [];
+                var isLast = stationId === _lastStationId;
+                var displayId = stationId === Math.floor(stationId) ? Math.floor(stationId) : stationId;
+                document.getElementById('modalTitle').textContent = 'Станция ' + displayId;
+
+                if (orders.length === 0) {
+                    document.getElementById('modalBody').innerHTML =
+                        '<p style="text-align:center;color:var(--text-secondary);padding:20px 0;">Нет заказов</p>';
+                } else {
+                    var html = '';
+                    orders.forEach(function(order) {
+                        html += '<div class="station-order" style="margin-bottom:16px;">' +
+                            '<h4>' + escapeHtml(order.order_number) + '</h4>' +
+                            '<p>Партия: ' + escapeHtml(order.batch) + '</p>' +
+                            '<p>Товар: ' + escapeHtml(order.product_code) + '</p>' +
+                            '<p>Цвет: ' + escapeHtml(order.color) + '</p>' +
+                            '<p>Кол-во: ' + order.quantity + '</p>' +
+                            '<p>Запущен: ' + (order.started_at ? MESUtils.formatDate(order.started_at) : '—') + '</p>';
+                        if (!isLast) {
+                            html += '<button class="btn btn-primary btn-sm" style="width:100%;margin-top:8px;" ' +
+                                'onclick="event.stopPropagation();MESTracking.moveOrder(' + order.id + ')">' +
+                                'Переместить дальше →</button>';
+                        } else {
+                            html += '<button class="btn btn-success btn-sm" style="width:100%;margin-top:8px;" disabled>✓ Завершён</button>';
+                        }
+                        html += '</div>';
+                    });
+                    document.getElementById('modalBody').innerHTML = html;
+                }
+
+                document.getElementById('orderModal').classList.add('active');
+            };
+
+            window.MESTracking.closeModal = function() {
+                document.getElementById('orderModal').classList.remove('active');
+            };
+
+            // Close modal on overlay click
+            document.getElementById('orderModal').addEventListener('click', function(e) {
+                if (e.target === this) window.MESTracking.closeModal();
+            });
+
+            /* ── Move order ────────────────────────────────── */
+
             async function moveOrder(orderId) {
+                window.MESTracking.closeModal();
                 if (!confirm('Переместить заказ на следующую станцию?')) return;
-                
+
                 try {
-                    const response = await fetch(`${API_BASE}/api/orders/${orderId}/move`, {
+                    const response = await fetch(API_BASE + '/api/orders/' + orderId + '/move', {
                         method: 'POST',
                         headers: window.MESUtils.authHeaders()
                     });
-                    
                     const result = await response.json();
-                    
                     if (result.success) {
                         const msg = result.message || 'Заказ перемещён';
                         window.MESUtils.showToast(msg.includes('completed') ? 'Заказ завершён!' : msg, 'success');
@@ -122,18 +211,15 @@
                     window.MESUtils.showToast('Ошибка соединения с сервером', 'error');
                 }
             }
-            
-            // Initialize
+
+            /* ── Init ─────────────────────────────────────── */
+
             document.addEventListener('DOMContentLoaded', function() {
-                // Start auto-refresh
                 window.MESRefresh.start(loadStations, 3000);
             });
-            
-            // Expose to global scope
-            window.MESTracking = {
-                moveOrder,
-                loadStations
-            };
+
+            window.MESTracking.moveOrder = moveOrder;
+            window.MESTracking.loadStations = loadStations;
         })();
     </script>
 </body>

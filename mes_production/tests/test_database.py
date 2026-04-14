@@ -17,17 +17,19 @@ class TestDatabaseInit:
         assert 'stations' in tables
         assert 'station_log' in tables
 
-    def test_initialises_10_stations(self, db):
+    def test_initialises_stations(self, db):
         stations = db.get_stations()
-        assert len(stations) == 10
-        assert stations[0]['name'] == "Station 1"
-        assert stations[9]['name'] == "Station 10"
+        assert len(stations) == 13  # 10 main + 3 sub-stations
+        assert stations[0]['id'] == 1.0
+        assert stations[1]['id'] == 1.1
+        assert stations[2]['id'] == 1.2
 
 
 class TestOrderNumberFormat:
-    def test_format_matches_ord_pattern(self, db):
-        order_number = db.get_next_order_number("TEST")
-        # Should match ORD-NNNN sequential pattern
+    def test_format_matches_ord_pattern(self, controller):
+        # Order numbers are now assigned atomically via lastrowid
+        result = controller.create_order("TEST", "PROD-X", "Black", 1)
+        order_number = result['orders'][0]['order_number']
         assert re.match(r'^ORD-\d{4,}$', order_number), f"Invalid format: {order_number}"
 
     def test_multiple_orders_have_sequential_numbers(self, controller):
@@ -100,14 +102,17 @@ class TestLaunchOrder:
         result = controller.launch_order(orders[0]['id'])
         assert result['success'] is False
 
-    def test_launch_station_occupied(self, controller):
+    def test_launch_multiple_orders_to_same_station(self, controller):
+        """Multiple orders can be launched to station 1 simultaneously."""
         r1 = controller.create_order("B1", "P1", "R", 1)
         r2 = controller.create_order("B2", "P2", "G", 1)
         o1 = r1['orders'][0]
         o2 = r2['orders'][0]
-        controller.launch_order(o1['id'])
-        result = controller.launch_order(o2['id'])
-        assert result['success'] is False
+        assert controller.launch_order(o1['id'])['success'] is True
+        assert controller.launch_order(o2['id'])['success'] is True
+        # Both orders should now be on station 1
+        assert controller.get_order(o1['id'])['current_station'] == 1
+        assert controller.get_order(o2['id'])['current_station'] == 1
 
 
 class TestMoveOrder:
@@ -117,14 +122,15 @@ class TestMoveOrder:
         controller.launch_order(orders[0]['id'])
         result = controller.move_order(orders[0]['id'])
         assert result['success'] is True
-        assert result['order']['current_station'] == 2
+        assert result['order']['current_station'] == 1.1  # moved from 1.0 to 1.1
 
-    def test_auto_complete_at_station_10(self, controller):
+    def test_auto_complete_at_last_station(self, controller):
         result = controller.create_order("B1", "P1", "R", 1)
         orders = result['orders']
         controller.launch_order(orders[0]['id'])
-        # Move through stations 2-10 (9 moves from station 1)
-        for _ in range(9):
+        # 13 stations total: 1.0, 1.1, 1.2, 2.0, 3.0, 3.1, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0
+        # Need 12 moves to reach station 10.0
+        for _ in range(12):
             controller.move_order(orders[0]['id'])
         order_data = controller.get_order(orders[0]['id'])
         assert order_data['status'] == 'completed'
@@ -202,4 +208,6 @@ class TestStations:
         orders = result['orders']
         controller.launch_order(orders[0]['id'])
         stations = controller.get_stations()
-        assert stations[0]['order_id'] == orders[0]['id']
+        assert stations[0]['name'] == "Station 1"
+        assert len(stations[0]['orders']) == 1
+        assert stations[0]['orders'][0]['id'] == orders[0]['id']

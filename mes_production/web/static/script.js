@@ -70,6 +70,21 @@
         return stationId ? stations[stationId - 1] || `Станция ${stationId}` : '-';
     }
     
+    // Escape HTML to prevent XSS
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Generic JSON fetch helper
+    function fetchJson(url, callback) {
+        fetch(url)
+            .then(function (r) { return r.json(); })
+            .then(function (data) { callback(data); })
+            .catch(function () { callback(null); });
+    }
+
     // Expose utilities globally
     window.MESUtils = {
         showToast,
@@ -77,7 +92,9 @@
         getStatusBadge,
         getStationName,
         getApiKey,
-        authHeaders
+        authHeaders,
+        fetchJson,
+        escapeHtml
     };
     
     // Auto-refresh functionality

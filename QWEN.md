@@ -2,18 +2,22 @@
 
 ## Project Overview
 
-**MES (Manufacturing Execution System)** is a web application for managing production orders and tracking their progression through a series of 10 workstations. Built with Python, Flask, and SQLite, it provides a complete production workflow management solution with a web UI and REST API.
+**MES (Manufacturing Execution System)** is a web application for managing production orders and tracking their progression through a series of workstations with sub-station support. Built with Python, Flask, and SQLite, it provides a complete production workflow management solution with a web UI and REST API, user authentication with role-based access control.
 
 ### Core Features
-- **Batch order creation** — generate multiple orders at once with auto-generated unique numbers
-- **Auto-generated order numbers** — format `ORD-<timestamp-last4>-<random-3digits>` (e.g. `ORD-4521-789`)
-- **Launch orders** into production and move them through 10 sequential workstations
-- **Auto-complete** orders when they reach the final station (Отгрузка)
+- **Batch order creation** — generate multiple orders at once with sequential unique numbers (`ORD-0001`, `ORD-0002`, ...)
+- **User authentication** — login/password via Flask-Login with session-based auth for browsers
+- **Role-based access control** — `admin`, `operator`, `viewer` roles with hierarchical permissions
+- **Sub-stations support** — main stations can have child sub-stations (e.g. 1.1, 1.2, 3.1)
+- **Multiple orders per station** — stations can process several orders simultaneously
+- **Launch orders** into production and move them through sequential workstations
+- **Auto-complete** orders when they reach the final station
 - **Real-time statistics** — production dashboard with live counts
 - **Order status management** — buffer, production, completed, cancelled
 
-### 10 Workstations
-1. Приёмка (Receiving) → 2. Сортировка (Sorting) → 3. Подготовка (Preparation) → 4. Сборка (Assembly) → 5. Пайка (Soldering) → 6. Контроль (QC) → 7. Тестирование (Testing) → 8. Упаковка (Packaging) → 9. Маркировка (Labeling) → 10. Отгрузка (Shipping)
+### Workstations (configurable)
+10 main stations + configurable sub-stations:
+1. Приёмка (1.1, 1.2) → 2. Сортировка → 3. Подготовка (3.1) → 4. Сборка → 5. Пайка → 6. Контроль → 7. Тестирование → 8. Упаковка → 9. Маркировка → 10. Отгрузка
 
 ## Tech Stack
 
@@ -21,42 +25,60 @@
 |----------|------------|
 | Language | Python 3.10+ |
 | Web Framework | Flask >= 3.0.0 |
+| Auth | Flask-Login >= 0.6.3 + Werkzeug password hashing |
 | Production Server | Waitress >= 3.0.0 |
-| Database | SQLite (FK enabled, transactions with rollback) |
+| Database | SQLite (FK enabled, transactions with rollback, auto-migration) |
 | Configuration | YAML (PyYAML >= 6.0) |
-| Frontend | HTML/CSS/JavaScript (dark/light theme) |
+| Frontend | HTML/CSS/JavaScript (dark/light theme, SVG pipeline) |
 | Testing | pytest >= 8.0, pytest-cov >= 5.0 |
 
 ## Project Structure
 
 ```
 stend/
-├── README.md                 # Project documentation
-├── QWEN.md                   # AI assistant context
+├── README.md                          # Project documentation
+├── QWEN.md                            # AI assistant context
+├── GIT_INSTRUCTIONS.md                # Git remote workflow guide
+├── AUTH_IMPLEMENTATION.md             # Auth implementation guide
 ├── .gitignore
 ├── mes_production/
-│   ├── run.py                # Entry point (Waitress server)
-│   ├── config.yaml           # System configuration
-│   ├── requirements.txt      # Python dependencies
-│   ├── pytest.ini            # Pytest configuration
+│   ├── run.py                         # Entry point (Waitress server)
+│   ├── config.yaml                    # System configuration (stations with subs)
+│   ├── requirements.txt               # Python dependencies
+│   ├── pytest.ini                     # Pytest configuration
 │   ├── core/
-│   │   └── controller.py     # Business logic controller
+│   │   └── controller.py              # Business logic controller
 │   ├── utils/
-│   │   ├── database.py       # SQLite database operations
-│   │   └── logger.py         # Logging setup (no handler duplication)
+│   │   ├── database.py                # SQLite operations (sub-station aware, logging, no conn leaks)
+│   │   └── logger.py                  # Logging setup (no handler duplication)
 │   ├── web/
-│   │   ├── app.py            # Flask application factory
-│   │   ├── auth.py           # API key authentication middleware
-│   │   ├── static/           # Static assets (CSS, JS)
-│   │   └── templates/        # HTML templates (index, tracking)
+│   │   ├── app.py                     # Flask application factory + all routes
+│   │   ├── auth.py                    # API key authentication middleware
+│   │   ├── auth_user.py               # Flask-Login user auth, @require_role, dual auth
+│   │   ├── models.py                  # User model (UserMixin, roles)
+│   │   ├── static/
+│   │   │   ├── style.css              # Main stylesheet (theme vars, dark mode)
+│   │   │   ├── script.js              # Shared utilities (MESUtils, MESRefresh)
+│   │   │   ├── orders.js              # Orders page logic
+│   │   │   ├── station.js             # Station detail page logic
+│   │   │   ├── map.js                 # SVG pipeline tracking page logic
+│   │   │   └── theme.js               # Theme toggle (light/dark)
+│   │   └── templates/
+│   │       ├── login.html             # Login page
+│   │       ├── index.html             # Main orders list
+│   │       ├── tracking.html          # Station cards with modal order details
+│   │       ├── station.html           # Station detail with dropdown + order table
+│   │       ├── map.html               # SVG pipeline visualization
+│   │       └── users.html             # User management (admin only)
 │   ├── tests/
-│   │   ├── conftest.py       # Shared fixtures (db, controller, auth_client)
-│   │   ├── test_database.py  # Unit tests (DB + Controller)
-│   │   └── test_api.py       # Integration tests (Flask API + auth)
+│   │   ├── conftest.py                # Shared fixtures (db, controller, logged_client, etc.)
+│   │   ├── test_database.py           # Unit tests (DB + Controller)
+│   │   └── test_api.py                # Integration tests (Flask API + auth + user mgmt)
 │   └── data/
-│       ├── mes.db            # SQLite database (auto-created)
-│       └── logs/             # Application logs
-└── venv/                     # Python virtual environment
+│       ├── mes.db                      # SQLite database (auto-created, auto-migrated)
+│       ├── users.db                    # Users database (auto-created)
+│       └── logs/                       # Application logs
+└── venv/                               # Python virtual environment
 ```
 
 ## Building and Running
@@ -84,66 +106,75 @@ python -m mes_production.web.app
 ### Stop
 Press `Ctrl+C` in the terminal.
 
+## Pages
+
+| Page | URL | Description |
+|------|-----|-------------|
+| Login | `/login` | Username/password login |
+| Orders | `/` | Main orders list with create modal and status filter |
+| Tracking | `/tracking` | Station cards (click → modal with order details) |
+| Station | `/station` | Dropdown station selector → orders table for selected station |
+| Pipeline | `/map` | SVG pipeline visualization with animated pipes and sub-stations |
+| Users | `/users` | User management (admin only) |
+| Logout | `/logout` | Log out |
+
 ## API Reference
 
 ### Orders
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/orders` | Public | Get all orders (optional: `?status=buffer/production/completed/cancelled`) |
-| POST | `/api/orders` | 🔒 Key | Create orders (body: `batch`, `product_code`, `color?`, `quantity` = count to generate) |
-| POST | `/api/orders/<id>/launch` | 🔒 Key | Launch order to station 1 |
-| POST | `/api/orders/<id>/move` | 🔒 Key | Move order to next station |
-| POST | `/api/orders/<id>/complete` | 🔒 Key | Complete order manually |
-| POST | `/api/orders/<id>/cancel` | 🔒 Key | Cancel order |
+| GET | `/api/orders` | 🔒 Session or Key | Get all orders (optional: `?status=buffer/production/completed/cancelled`) |
+| POST | `/api/orders` | 🔒 Session or Key | Create orders (body: `batch`, `product_code`, `color?`, `quantity` = count to generate) |
+| POST | `/api/orders/<id>/launch` | 🔒 Session or Key | Launch order to first station |
+| POST | `/api/orders/<id>/move` | 🔒 Session or Key | Move order to next station/sub-station |
+| POST | `/api/orders/<id>/complete` | 🔒 Session or Key | Complete order manually |
+| POST | `/api/orders/<id>/cancel` | 🔒 Session or Key | Cancel order |
 
 ### Stations & Statistics
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/api/stations` | Public | Get all stations with current orders |
-| GET | `/api/statistics` | Public | Get production statistics |
+| GET | `/api/stations` | 🔒 Session or Key | Get all stations (incl. sub-stations) with current orders |
+| GET | `/api/statistics` | 🔒 Session or Key | Get production statistics |
 
-### Batch Creation Response
-```json
-{
-  "success": true,
-  "orders": [...],
-  "count": 3,
-  "message": "Created 3 order(s)"
-}
-```
+### Users (admin only)
 
-Each order has `quantity: 1` and a unique auto-generated `order_number` like `ORD-4521-789`.
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/api/users` | 🔒 Session (admin) | Create user (body: `username`, `password`, `role`) |
+| POST | `/api/users/<id>` | 🔒 Session (admin) | Update user (body: `role`, `password?`, `is_active`) |
+| DELETE | `/api/users/<id>` | 🔒 Session (admin) | Delete user |
 
-## Authentication
+### Dual Authentication
 
-Write operations (POST) require a valid API key in the `X-API-Key` header.
-Read operations (GET) and page routes are public.
+All API endpoints accept **either**:
+- **Browser session** — user logged in via `/login` (cookie-based)
+- **API key header** — `X-API-Key: your-secret-key` (for scripts/curl)
 
 ```bash
-# Create orders (authenticated)
+# Via session (browser — automatic)
+curl -b cookie_jar http://localhost:5000/api/orders
+
+# Via API key
 curl -X POST http://localhost:5000/api/orders \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-secret-key" \
   -d '{"batch":"B1","product_code":"P1","color":"Red","quantity":3}'
 
-# Get orders (public)
+# Public: no auth needed if API keys are empty in config
 curl http://localhost:5000/api/orders
 ```
 
-Frontend automatically includes the API key via `<meta name="api-key">` tag rendered from server config.
+## User Roles
 
-Configure API keys in `config.yaml`:
+| Role | Level | Permissions |
+|------|-------|-------------|
+| `viewer` | 1 | Read-only — view orders, stations, statistics |
+| `operator` | 2 | Viewer + create/launch/move/complete/cancel orders |
+| `admin` | 3 | Operator + manage users, access `/users` page |
 
-```yaml
-auth:
-  api_keys:
-    - your-secret-key-here
-    - another-key
-```
-
-If `api_keys` is empty or missing, auth is disabled (all requests pass through).
+Default admin: `admin` / `admin` (created on first startup, should be changed).
 
 ## Configuration
 
@@ -156,9 +187,16 @@ server:
   host: 0.0.0.0
   port: 5000
 stations:
-  - Приёмка
-  - Сортировка
-  # ... (10 stations total)
+  - name: Приёмка
+    subs:
+      - Приёмка 1.1
+      - Приёмка 1.2
+  - name: Сортировка
+  - name: Подготовка
+    subs:
+      - Подготовка 3.1
+  - name: Сборка
+  # ... (all stations)
 auth:
   api_keys:
     - change-me-to-a-secure-key
@@ -169,16 +207,21 @@ logging:
 
 ## Database
 
-- **Foreign keys** enabled (`PRAGMA foreign_keys = ON`)
-- **Transactions** with rollback for multi-step operations (launch, move, complete, cancel)
-- **Order numbers** auto-generated: `ORD-<timestamp-last4>-<random-3digits>`
-
-Three tables:
+### Tables
 | Table | Purpose |
 |---|---|
-| **orders** | Production orders with status tracking |
-| **stations** | 10 workstation slots with current order references |
-| **station_log** | Audit log of order movements between stations |
+| **orders** | Production orders (status, `current_station REAL` for sub-stations) |
+| **stations** | Workstation slots (`id REAL` for sub-stations: 1.0, 1.1, 1.2, etc.) |
+| **station_log** | Audit log of order movements |
+| **users** (users.db) | User accounts (username, password_hash, role, is_active) |
+
+### Features
+- **Foreign keys** enabled (`PRAGMA foreign_keys = ON`)
+- **Transactions** with rollback for multi-step operations
+- **Auto-migration** — old `INTEGER` station IDs automatically migrated to `REAL` for sub-station support
+- **Sequential order numbers** — `ORD-0001`, `ORD-0002`, ... (atomic via `lastrowid`)
+- **Multiple orders per station** — no occupancy checks, orders move freely
+- **Sub-station ordering** — stations sorted by decimal ID (1.0 → 1.1 → 1.2 → 2.0 → ...)
 
 ## Testing
 
@@ -194,26 +237,29 @@ pytest tests/test_api.py -v
 pytest -k "launch" -v
 ```
 
-**Current coverage: 92%** (47 tests)
+**55 tests, all passing.**
 
 | File | Coverage |
 |---|---|
 | `core/controller.py` | 100% |
-| `utils/database.py` | 90% |
+| `utils/database.py` | 91% |
 | `utils/logger.py` | 100% |
-| `web/app.py` | 92% |
+| `web/app.py` | 90% |
 | `web/auth.py` | 86% |
 
-- `tests/test_database.py` — Unit tests for DB init, order generation, CRUD, stations, statistics
-- `tests/test_api.py` — Integration tests for all endpoints including auth (unauthorized, wrong key, success)
-- `tests/conftest.py` — Shared fixtures (`db`, `controller`, `app`, `auth_client`, `unauth_client`, `client`)
+- `tests/test_database.py` — Unit tests for DB init, order generation, CRUD, stations, sub-stations, statistics
+- `tests/test_api.py` — Integration tests for all endpoints, auth, user management, page routes
+- `tests/conftest.py` — Shared fixtures (`db`, `controller`, `app`, `logged_client`, `auth_client`, `unauth_client`, `client`)
 
 ## Development Conventions
 
 - **Architecture:** MVC-style — `Controller` for business logic, `Database` for persistence, `AuthService` for auth
 - **App Factory:** Flask app via `create_app()` pattern for testability
 - **UTF-8:** Russian language in station names, UI, and documentation
-- **Error Handling:** 400 on invalid input, 401 on missing/invalid API key
-- **Auto-completion:** Orders reaching station 10 auto-complete
-- **Logger:** Handler duplication prevented (`if logger.handlers: return`)
+- **Error Handling:** 400 on invalid input, 401 on missing/invalid auth, 403 on insufficient role
+- **Auto-completion:** Orders reaching the last station auto-complete
+- **Logger:** Handler duplication prevented (`if logger.handlers: return`), all exceptions logged with `exc_info=True`
+- **Connection safety:** All DB methods wrap entire body in `try/finally: conn.close()`
 - **Each order has quantity=1** — the "quantity" field in the create API means "count of orders to generate"
+- **Station config format:** `{name: str, subs?: str[]}` — sub-stations get decimal IDs (1.1, 1.2), main stations get integer IDs (1.0, 2.0)
+- **Dark/light theme:** Toggle via `data-theme` attribute, persisted in `localStorage`

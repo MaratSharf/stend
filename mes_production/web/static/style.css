@@ -529,3 +529,124 @@ tr:hover {
         opacity: 1;
     }
 }
+
+/* ── Station page ──────────────────────────────────────────── */
+
+.filter-label {
+    font-weight: 500;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.station-header-bar {
+    margin-bottom: 20px;
+}
+
+.station-header-bar .station-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.station-order-count {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    background-color: var(--bg-secondary);
+    padding: 4px 12px;
+    border-radius: 20px;
+}
+
+.station-placeholder {
+    text-align: center;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.station-empty {
+    text-align: center;
+    padding: 40px 0;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+/* ── Tracking page sub-station ─────────────────────────────── */
+
+.clickable {
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.clickable:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-lg);
+}
+
+.station-group .sub-station-row {
+    border-top: 1px solid var(--border-color);
+    padding-top: 12px;
+    margin-top: 12px;
+}
+
+.station-group .sub-station-row .sub-header {
+    margin-bottom: 10px;
+}
+
+.station-group .sub-station-row .station-number-sub {
+    background-color: var(--status-buffer);
+    width: 26px;
+    height: 26px;
+    font-size: 0.75rem;
+}
+
+/* ── SVG Pipeline page ─────────────────────────────────────── */
+
+.pipeline-wrapper {
+    background-color: var(--bg-card);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border-color);
+    padding: 20px;
+    overflow-x: auto;
+}
+
+.pipeline-wrapper svg {
+    display: block;
+    margin: 0 auto;
+    max-width: 100%;
+    height: auto;
+}
+
+.legend {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.legend-dot {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+}
+
+.legend-dot--buffer {
+    background-color: var(--status-buffer);
+}
+
+.legend-dot--production {
+    background-color: var(--status-production);
+}
+
+.legend-dot--completed {
+    background-color: var(--status-completed);
+}
+
+.legend-dot--empty {
+    background-color: var(--bg-secondary);
+}
