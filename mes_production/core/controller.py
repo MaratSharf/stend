@@ -41,12 +41,12 @@ class Controller:
         }
     
     def move_order(self, order_id: int) -> Dict[str, Any]:
-        """Move order to next station."""
-        success = self.db.move_order(order_id)
+        """Move order to next station. Sub-stations must be completed first."""
+        result = self.db.move_order(order_id)
         order = self.db.get_order(order_id)
 
         # Check if order completed all stations (reached last station)
-        if success and order and order['current_station'] is not None:
+        if result['success'] and order and order['current_station'] is not None:
             last_id = self.db._last_station_id()
             if order['current_station'] == last_id:
                 # Auto-complete when reaching last station
@@ -55,13 +55,13 @@ class Controller:
                 return {
                     'success': True,
                     'order': order,
-                    'message': f'Order moved to final station and completed automatically'
+                    'message': 'Order moved to final station and completed automatically'
                 }
 
         return {
-            'success': success,
+            'success': result['success'],
             'order': order,
-            'message': 'Order moved successfully' if success else 'Failed to move order (next station may be occupied)'
+            'message': result.get('message', 'Order moved successfully' if result['success'] else 'Failed to move order')
         }
     
     def complete_order(self, order_id: int) -> Dict[str, Any]:

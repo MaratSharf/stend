@@ -120,17 +120,39 @@ class TestMoveOrder:
         result = controller.create_order("B1", "P1", "R", 1)
         orders = result['orders']
         controller.launch_order(orders[0]['id'])
+        # Station 1 has sub-stations 1.1, 1.2 — complete them first
+        controller.db.complete_sub_station(orders[0]['id'], 1.1)
+        controller.db.complete_sub_station(orders[0]['id'], 1.2)
         result = controller.move_order(orders[0]['id'])
         assert result['success'] is True
-        assert result['order']['current_station'] == 1.1  # moved from 1.0 to 1.1
+        assert result['order']['current_station'] == 2.0
+
+    def test_move_blocked_by_pending_subs(self, controller):
+        """Cannot move from station 1 if sub-stations aren't completed."""
+        result = controller.create_order("B1", "P1", "R", 1)
+        orders = result['orders']
+        controller.launch_order(orders[0]['id'])
+        result = controller.move_order(orders[0]['id'])
+        assert result['success'] is False
+        assert 'подстанции' in result['message'].lower()
 
     def test_auto_complete_at_last_station(self, controller):
         result = controller.create_order("B1", "P1", "R", 1)
         orders = result['orders']
         controller.launch_order(orders[0]['id'])
-        # 13 stations total: 1.0, 1.1, 1.2, 2.0, 3.0, 3.1, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0
-        # Need 12 moves to reach station 10.0
-        for _ in range(12):
+        # Complete sub-stations for station 1
+        controller.db.complete_sub_station(orders[0]['id'], 1.1)
+        controller.db.complete_sub_station(orders[0]['id'], 1.2)
+        # Now move from 1.0 → 2.0 (1 move)
+        controller.move_order(orders[0]['id'])
+        # 2.0 has no subs → move 2.0 → 3.0 (2nd move)
+        controller.move_order(orders[0]['id'])
+        # Complete sub-stations for station 3
+        controller.db.complete_sub_station(orders[0]['id'], 3.1)
+        # Move 3.0 → 4.0 (3rd move)
+        controller.move_order(orders[0]['id'])
+        # Remaining: 4→5→6→7→8→9→10 = 6 more moves
+        for _ in range(6):
             controller.move_order(orders[0]['id'])
         order_data = controller.get_order(orders[0]['id'])
         assert order_data['status'] == 'completed'

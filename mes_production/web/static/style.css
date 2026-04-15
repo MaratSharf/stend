@@ -571,14 +571,59 @@ tr:hover {
 
 /* ── Tracking page sub-station ─────────────────────────────── */
 
-.clickable {
-    cursor: pointer;
-    transition: transform 0.2s, box-shadow 0.2s;
+/* Chevron rotation */
+.chevron {
+    transition: transform 0.3s ease;
+    color: var(--text-secondary);
+    flex-shrink: 0;
 }
 
-.clickable:hover {
-    transform: translateY(-3px);
-    box-shadow: var(--shadow-lg);
+.chevron.open {
+    transform: rotate(180deg);
+}
+
+/* Row inside a station card */
+.station-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    border-radius: 6px;
+    transition: background-color 0.2s;
+}
+
+.station-row.main-row {
+    cursor: pointer;
+}
+
+.station-row.main-row:hover {
+    background-color: var(--bg-secondary);
+}
+
+.station-row.sub-row {
+    padding-left: 28px;
+    cursor: pointer;
+}
+
+.station-row.sub-row:hover {
+    background-color: var(--bg-secondary);
+}
+
+.subs-container {
+    animation: slideDown 0.25s ease;
+}
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.station-row .station-number-sub {
+    background-color: var(--status-buffer);
+}
+
+.clickable {
+    cursor: pointer;
 }
 
 .station-group .sub-station-row {

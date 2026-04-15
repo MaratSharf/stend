@@ -9,12 +9,18 @@
         return meta ? meta.content : null;
     }
     
-    // Build headers for API requests
+    // Build headers for API requests (includes CSRF token for session auth)
     function authHeaders(extraHeaders = {}) {
         const headers = { ...extraHeaders };
         const apiKey = getApiKey();
         if (apiKey) {
             headers['X-API-Key'] = apiKey;
+        } else {
+            // No API key → session auth → must include CSRF token
+            const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+            if (csrfMeta && csrfMeta.content) {
+                headers['X-CSRF-Token'] = csrfMeta.content;
+            }
         }
         return headers;
     }

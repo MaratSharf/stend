@@ -5,6 +5,7 @@ Handles SQLite operations for orders, stations, and station logs.
 Supports sub-stations (e.g. 1.1, 1.2, 3.1) via REAL-valued station IDs.
 """
 import sqlite3
+import math
 import logging
 import os
 from datetime import datetime
@@ -63,13 +64,7 @@ class Database:
                     )
                 ''')
                 conn.commit()
-            # ── Migration: orders.current_station INTEGER → REAL ─────
-            cursor.execute("PRAGMA table_info(orders)")
-            columns = [col['name'] for col in cursor.fetchall()]
-            # current_station already exists; SQLite allows storing REAL in INTEGER column
-            # but for safety we check type
-
-            # ── Normal table creation ────────────────────────────────
+            # ── Normal table creation (always runs first) ─────────────
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS orders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,6 +75,7 @@ class Database:
                     quantity INTEGER NOT NULL,
                     status TEXT DEFAULT 'buffer',
                     current_station REAL,
+                    completed_subs TEXT DEFAULT '',
                     created_at TEXT NOT NULL,
                     started_at TEXT,
                     completed_at TEXT
@@ -105,6 +101,14 @@ class Database:
                     FOREIGN KEY (station_id) REFERENCES stations(id)
                 )
             ''')
+
+            # ── Migration: add completed_subs column (after table exists) ──
+            cursor.execute("PRAGMA table_info(orders)")
+            col_names = [col['name'] for col in cursor.fetchall()]
+            if 'completed_subs' not in col_names:
+                self.logger.info("Migration: adding completed_subs column to orders")
+                cursor.execute("ALTER TABLE orders ADD COLUMN completed_subs TEXT DEFAULT ''")
+
             conn.commit()
         finally:
             conn.close()
@@ -171,6 +175,56 @@ class Database:
         ids = self._station_ids_sorted()
         return ids[-1] if ids else 10.0
 
+    def _sub_stations_of(self, main_id: float) -> List[float]:
+        """Get sub-station IDs for a main station (e.g. 1.1, 1.2 for main 1.0)."""
+        ids = self._station_ids_sorted()
+        return [sid for sid in ids if math.floor(sid) == int(main_id) and sid != float(int(main_id))]
+
+    def complete_sub_station(self, order_id: int, sub_station_id: float) -> Dict[str, Any]:
+        """Mark a sub-station as completed for an order."""
+        conn = self.get_connection()
+        try:
+            order = self.get_order(order_id)
+            if not order or order['status'] != 'production':
+                return {'success': False, 'message': 'Order not in production'}
+
+            # Verify the order is at the parent station
+            parent = float(int(sub_station_id))
+            if order['current_station'] != parent:
+                return {'success': False, 'message': 'Order is not at the parent station'}
+
+            # Get current completed_subs
+            completed = set()
+            if order.get('completed_subs'):
+                completed = set(float(x) for x in order['completed_subs'].split(',') if x.strip())
+
+            if sub_station_id in completed:
+                return {'success': False, 'message': 'Sub-station already completed'}
+
+            completed.add(sub_station_id)
+            completed_str = ','.join(str(s) for s in sorted(completed))
+
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE orders SET completed_subs = ? WHERE id = ?
+            ''', (completed_str, order_id))
+
+            # Log the completion
+            cursor.execute('''
+                INSERT INTO station_log (order_id, station_id, entered_at, exited_at, result)
+                VALUES (?, ?, ?, ?, 'SUB_COMPLETED')
+            ''', (order_id, sub_station_id, datetime.now().isoformat(), datetime.now().isoformat()))
+
+            conn.commit()
+            self.logger.info(f"Order {order_id} completed sub-station {sub_station_id}")
+            return {'success': True, 'message': f'Sub-station {sub_station_id} completed'}
+        except Exception as e:
+            self.logger.error(f"complete_sub_station({order_id}, {sub_station_id}) failed: {e}", exc_info=True)
+            conn.rollback()
+            return {'success': False, 'message': str(e)}
+        finally:
+            conn.close()
+
     # ── Init stations ──────────────────────────────────────────
 
     def init_stations(self, station_config: List[Any]):
@@ -231,6 +285,7 @@ class Database:
                     'quantity': 1,
                     'status': 'buffer',
                     'current_station': None,
+                    'completed_subs': '',
                     'created_at': created_at,
                     'started_at': None,
                     'completed_at': None
@@ -283,7 +338,7 @@ class Database:
 
             cursor.execute('''
                 UPDATE orders
-                SET status = 'production', current_station = ?, started_at = ?
+                SET status = 'production', current_station = ?, started_at = ?, completed_subs = ''
                 WHERE id = ? AND status = 'buffer'
             ''', (first_id, started_at, order_id))
 
@@ -305,32 +360,74 @@ class Database:
         finally:
             conn.close()
 
-    def move_order(self, order_id: int) -> bool:
-        """Move order to the next station. Supports sub-station ordering."""
+    def move_order(self, order_id: int) -> Dict[str, Any]:
+        """
+        Move order to the next station.
+        If the current main station has sub-stations, all must be completed first.
+        Returns dict with success bool and optional message.
+        """
         conn = self.get_connection()
         try:
             order = self.get_order(order_id)
             if not order or order['status'] != 'production':
-                return False
+                return {'success': False, 'message': 'Order not in production'}
 
             current_station = order['current_station']
             if current_station is None:
-                return False
+                return {'success': False, 'message': 'Order has no current station'}
 
-            next_station = self._next_station_id(current_station)
+            # If on a main station that has sub-stations, check completion
+            if current_station == math.floor(current_station):
+                subs = self._sub_stations_of(current_station)
+                if subs:
+                    completed = set()
+                    if order.get('completed_subs'):
+                        completed = set(float(x) for x in order['completed_subs'].split(',') if x.strip())
+                    pending = [s for s in subs if s not in completed]
+                    if pending:
+                        pending_str = ', '.join(str(s) for s in pending)
+                        return {'success': False, 'message': f'Сначала завершите подстанции: {pending_str}'}
+                    # All subs completed — skip to next main station
+                    all_ids = self._station_ids_sorted()
+                    # Find the next station with integer ID (main station)
+                    current_int = int(current_station)
+                    for sid in all_ids:
+                        if sid > current_station and sid == math.floor(sid):
+                            next_station = sid
+                            break
+                    else:
+                        next_station = None
+                else:
+                    next_station = self._next_station_id(current_station)
+            else:
+                # On a sub-station — move to next station in sequence
+                next_station = self._next_station_id(current_station)
+
             if next_station is None:
-                return False  # already at last station
+                return {'success': False, 'message': 'Order is already at the last station'}
 
             cursor = conn.cursor()
-            exited_at = datetime.now().isoformat()
 
-            cursor.execute('''
-                UPDATE station_log
-                SET exited_at = ?, result = 'OK'
-                WHERE order_id = ? AND station_id = ? AND exited_at IS NULL
-            ''', (exited_at, order_id, current_station))
-
-            cursor.execute('UPDATE orders SET current_station = ? WHERE id = ?', (next_station, order_id))
+            # If moving from a main station with completed subs to next main, clear completed_subs
+            is_main_with_subs = (current_station == math.floor(current_station) and
+                                 self._sub_stations_of(current_station) and
+                                 order.get('completed_subs'))
+            if is_main_with_subs:
+                exited_at = datetime.now().isoformat()
+                cursor.execute('''
+                    UPDATE station_log
+                    SET exited_at = ?, result = 'OK'
+                    WHERE order_id = ? AND station_id = ? AND exited_at IS NULL
+                ''', (exited_at, order_id, current_station))
+                cursor.execute('UPDATE orders SET current_station = ?, completed_subs = ? WHERE id = ?', (next_station, '', order_id))
+            else:
+                exited_at = datetime.now().isoformat()
+                cursor.execute('''
+                    UPDATE station_log
+                    SET exited_at = ?, result = 'OK'
+                    WHERE order_id = ? AND station_id = ? AND exited_at IS NULL
+                ''', (exited_at, order_id, current_station))
+                cursor.execute('UPDATE orders SET current_station = ? WHERE id = ?', (next_station, order_id))
 
             entered_at = datetime.now().isoformat()
             cursor.execute('''
@@ -340,11 +437,11 @@ class Database:
 
             conn.commit()
             self.logger.info(f"Order {order_id} moved from station {current_station} to {next_station}")
-            return True
+            return {'success': True, 'message': 'Order moved successfully'}
         except Exception as e:
             self.logger.error(f"move_order({order_id}) failed: {e}", exc_info=True)
             conn.rollback()
-            return False
+            return {'success': False, 'message': f'Error: {str(e)}'}
         finally:
             conn.close()
 

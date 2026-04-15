@@ -43,7 +43,7 @@ def user_db_path(tmp_path):
 
 
 def _init_test_users(db_path: str):
-    """Create test users in the user DB."""
+    """Create test users in the user DB. All have password_changed=1."""
     conn = sqlite3.connect(db_path)
     try:
         cursor = conn.cursor()
@@ -54,21 +54,22 @@ def _init_test_users(db_path: str):
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'viewer',
                 is_active INTEGER NOT NULL DEFAULT 1,
+                password_changed INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
             )
         ''')
         now = datetime.now().isoformat()
-        # Admin user
+        # Admin user (password_changed=1 so no redirect in tests)
         admin_hash = generate_password_hash('admin')
         cursor.execute('''
-            INSERT INTO users (username, password_hash, role, created_at)
-            VALUES (?, ?, 'admin', ?)
+            INSERT INTO users (username, password_hash, role, password_changed, created_at)
+            VALUES (?, ?, 'admin', 1, ?)
         ''', ('admin', admin_hash, now))
         # Viewer user
         viewer_hash = generate_password_hash('viewer')
         cursor.execute('''
-            INSERT INTO users (username, password_hash, role, created_at)
-            VALUES (?, ?, 'viewer', ?)
+            INSERT INTO users (username, password_hash, role, password_changed, created_at)
+            VALUES (?, ?, 'viewer', 1, ?)
         ''', ('viewer', viewer_hash, now))
         conn.commit()
     finally:
@@ -158,12 +159,27 @@ def unauth_client(app):
 
 @pytest.fixture
 def logged_client(app):
-    """Provide a test client logged in as admin via session."""
+    """Provide a test client logged in as admin via session, with CSRF token."""
     c = app.test_client()
     # Login via the session-based login route
-    c.post('/login', data={
+    resp = c.post('/login', data={
         'username': 'admin',
         'password': 'admin',
         'remember': 'yes'
     }, follow_redirects=True)
+    # Extract CSRF token from the response meta tag
+    import re
+    m = re.search(r'meta name="csrf-token" content="([^"]+)"', resp.data.decode())
+    csrf_token = m.group(1) if m else None
+
+    # Store CSRF token for use in POST requests
+    c.csrf_token = csrf_token
+
+    def _post_with_csrf(url, **kwargs):
+        headers = kwargs.pop('headers', {}) or {}
+        if csrf_token:
+            headers['X-CSRF-Token'] = csrf_token
+        return c.post(url, headers=headers, **kwargs)
+
+    c.post_csrf = _post_with_csrf
     return c

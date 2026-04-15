@@ -22,12 +22,14 @@ class User(UserMixin):
     """Simple user model backed by database rows (dicts)."""
 
     def __init__(self, id: int, username: str, password_hash: str,
-                 role: str = 'viewer', is_active: bool = True):
+                 role: str = 'viewer', is_active: bool = True,
+                 password_changed: bool = True):
         self.id = id
         self.username = username
         self.password_hash = password_hash
         self.role = role
         self._is_active = is_active
+        self._password_changed = password_changed
 
     @staticmethod
     def from_dict(d: dict) -> 'User':
@@ -37,6 +39,7 @@ class User(UserMixin):
             password_hash=d['password_hash'],
             role=d.get('role', 'viewer'),
             is_active=bool(d.get('is_active', 1)),
+            password_changed=bool(d.get('password_changed', 1)),
         )
 
     def set_password(self, password: str) -> None:
@@ -56,6 +59,11 @@ class User(UserMixin):
     @property
     def is_active(self) -> bool:
         return self._is_active
+
+    @property
+    def needs_password_change(self) -> bool:
+        """True if user has never changed their password."""
+        return not self._password_changed
 
     def __repr__(self):
         return f'<User {self.username} ({self.role})>'

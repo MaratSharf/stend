@@ -11,24 +11,24 @@ class TestGetOrders:
         data = resp.get_json()
         assert data == []
 
-    def test_filter_by_status(self, logged_client):
-        logged_client.post('/api/orders', json={
+    def test_filter_by_status(self, auth_client, logged_client):
+        auth_client.post('/api/orders', json={
             'batch': 'B1', 'product_code': 'P1',
             'color': 'R', 'quantity': 2
-        })
+        }, headers={'X-API-Key': 'test-secret-key-12345'})
         resp = logged_client.get('/api/orders?status=buffer')
         assert resp.status_code == 200
         assert len(resp.get_json()) == 2
 
 
 class TestCreateOrder:
-    def test_create_single_order(self, logged_client):
-        resp = logged_client.post('/api/orders', json={
+    def test_create_single_order(self, auth_client):
+        resp = auth_client.post('/api/orders', json={
             'batch': 'BATCH-1',
             'product_code': 'PROD-42',
             'color': 'Blue',
             'quantity': 1
-        })
+        }, headers={'X-API-Key': 'test-secret-key-12345'})
         assert resp.status_code == 201
         data = resp.get_json()
         assert data['count'] == 1
@@ -36,13 +36,13 @@ class TestCreateOrder:
         assert data['orders'][0]['batch'] == 'BATCH-1'
         assert data['orders'][0]['status'] == 'buffer'
 
-    def test_create_multiple_orders(self, logged_client):
-        resp = logged_client.post('/api/orders', json={
+    def test_create_multiple_orders(self, auth_client):
+        resp = auth_client.post('/api/orders', json={
             'batch': 'BATCH-2',
             'product_code': 'PROD-43',
             'color': 'Red',
             'quantity': 3
-        })
+        }, headers={'X-API-Key': 'test-secret-key-12345'})
         assert resp.status_code == 201
         data = resp.get_json()
         assert data['count'] == 3
@@ -51,19 +51,21 @@ class TestCreateOrder:
             assert order['batch'] == 'BATCH-2'
             assert order['quantity'] == 1
 
-    def test_create_order_missing_fields(self, logged_client):
-        resp = logged_client.post('/api/orders', json={'batch': 'B1'})
+    def test_create_order_missing_fields(self, auth_client):
+        resp = auth_client.post('/api/orders', json={'batch': 'B1'},
+                                headers={'X-API-Key': 'test-secret-key-12345'})
         assert resp.status_code == 400
 
-    def test_create_order_no_body(self, logged_client):
-        resp = logged_client.post('/api/orders', content_type='application/json')
+    def test_create_order_no_body(self, auth_client):
+        resp = auth_client.post('/api/orders', content_type='application/json',
+                                headers={'X-API-Key': 'test-secret-key-12345'})
         assert resp.status_code == 400
 
-    def test_create_order_bad_quantity(self, logged_client):
-        resp = logged_client.post('/api/orders', json={
+    def test_create_order_bad_quantity(self, auth_client):
+        resp = auth_client.post('/api/orders', json={
             'batch': 'B1', 'product_code': 'P1',
             'color': 'R', 'quantity': 'abc'
-        })
+        }, headers={'X-API-Key': 'test-secret-key-12345'})
         assert resp.status_code == 400
 
     def test_create_unauthorized(self, unauth_client):
@@ -84,20 +86,22 @@ class TestCreateOrder:
 
 
 class TestLaunchOrder:
-    def test_launch_success(self, logged_client):
-        order_resp = logged_client.post('/api/orders', json={
+    def test_launch_success(self, auth_client):
+        order_resp = auth_client.post('/api/orders', json={
             'batch': 'B1', 'product_code': 'P1',
             'color': 'R', 'quantity': 1
-        })
+        }, headers={'X-API-Key': 'test-secret-key-12345'})
         order_id = order_resp.get_json()['orders'][0]['id']
 
-        resp = logged_client.post(f'/api/orders/{order_id}/launch')
+        resp = auth_client.post(f'/api/orders/{order_id}/launch',
+                                headers={'X-API-Key': 'test-secret-key-12345'})
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['success'] is True
 
-    def test_launch_nonexistent(self, logged_client):
-        resp = logged_client.post('/api/orders/9999/launch')
+    def test_launch_nonexistent(self, auth_client):
+        resp = auth_client.post('/api/orders/9999/launch',
+                                headers={'X-API-Key': 'test-secret-key-12345'})
         assert resp.status_code == 400
 
     def test_launch_unauthorized(self, unauth_client):
@@ -107,17 +111,27 @@ class TestLaunchOrder:
 
 
 class TestMoveOrder:
-    def test_move_success(self, logged_client):
-        order_resp = logged_client.post('/api/orders', json={
+    def test_move_success(self, auth_client):
+        order_resp = auth_client.post('/api/orders', json={
             'batch': 'B1', 'product_code': 'P1',
             'color': 'R', 'quantity': 1
-        })
+        }, headers={'X-API-Key': 'test-secret-key-12345'})
         order_id = order_resp.get_json()['orders'][0]['id']
-        logged_client.post(f'/api/orders/{order_id}/launch')
+        auth_client.post(f'/api/orders/{order_id}/launch',
+                         headers={'X-API-Key': 'test-secret-key-12345'})
 
-        resp = logged_client.post(f'/api/orders/{order_id}/move')
+        # Station 1 has sub-stations — complete them first via API
+        auth_client.post(f'/api/orders/{order_id}/complete-sub',
+                         json={'sub_station_id': 1.1},
+                         headers={'X-API-Key': 'test-secret-key-12345'})
+        auth_client.post(f'/api/orders/{order_id}/complete-sub',
+                         json={'sub_station_id': 1.2},
+                         headers={'X-API-Key': 'test-secret-key-12345'})
+
+        resp = auth_client.post(f'/api/orders/{order_id}/move',
+                                headers={'X-API-Key': 'test-secret-key-12345'})
         assert resp.status_code == 200
-        assert resp.get_json()['order']['current_station'] == 1.1
+        assert resp.get_json()['order']['current_station'] == 2.0
 
     def test_move_unauthorized(self, unauth_client):
         resp = unauth_client.post('/api/orders/1/move')
@@ -125,15 +139,17 @@ class TestMoveOrder:
 
 
 class TestCompleteOrder:
-    def test_complete_success(self, logged_client):
-        order_resp = logged_client.post('/api/orders', json={
+    def test_complete_success(self, auth_client):
+        order_resp = auth_client.post('/api/orders', json={
             'batch': 'B1', 'product_code': 'P1',
             'color': 'R', 'quantity': 1
-        })
+        }, headers={'X-API-Key': 'test-secret-key-12345'})
         order_id = order_resp.get_json()['orders'][0]['id']
-        logged_client.post(f'/api/orders/{order_id}/launch')
+        auth_client.post(f'/api/orders/{order_id}/launch',
+                         headers={'X-API-Key': 'test-secret-key-12345'})
 
-        resp = logged_client.post(f'/api/orders/{order_id}/complete')
+        resp = auth_client.post(f'/api/orders/{order_id}/complete',
+                                headers={'X-API-Key': 'test-secret-key-12345'})
         assert resp.status_code == 200
         assert resp.get_json()['order']['status'] == 'completed'
 
@@ -143,14 +159,15 @@ class TestCompleteOrder:
 
 
 class TestCancelOrder:
-    def test_cancel_success(self, logged_client):
-        order_resp = logged_client.post('/api/orders', json={
+    def test_cancel_success(self, auth_client):
+        order_resp = auth_client.post('/api/orders', json={
             'batch': 'B1', 'product_code': 'P1',
             'color': 'R', 'quantity': 1
-        })
+        }, headers={'X-API-Key': 'test-secret-key-12345'})
         order_id = order_resp.get_json()['orders'][0]['id']
 
-        resp = logged_client.post(f'/api/orders/{order_id}/cancel')
+        resp = auth_client.post(f'/api/orders/{order_id}/cancel',
+                                headers={'X-API-Key': 'test-secret-key-12345'})
         assert resp.status_code == 200
         assert resp.get_json()['order']['status'] == 'cancelled'
 
@@ -174,11 +191,11 @@ class TestStatistics:
         assert 'total' in data
         assert 'completion_rate' in data
 
-    def test_statistics_reflects_orders(self, logged_client):
-        logged_client.post('/api/orders', json={
+    def test_statistics_reflects_orders(self, auth_client, logged_client):
+        auth_client.post('/api/orders', json={
             'batch': 'B1', 'product_code': 'P1',
             'color': 'R', 'quantity': 5
-        })
+        }, headers={'X-API-Key': 'test-secret-key-12345'})
         resp = logged_client.get('/api/statistics')
         assert resp.get_json()['total'] == 5
 

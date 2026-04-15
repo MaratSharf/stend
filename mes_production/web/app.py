@@ -1,14 +1,17 @@
 """
 MES Production System - Flask Application
 """
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from werkzeug.security import generate_password_hash
+from werkzeug.security import generate_password_hash, check_password_hash
 from core.controller import Controller
 from utils.database import Database
 from utils.logger import setup_logger
 from web.auth import AuthService
-from web.auth_user import login_manager, authenticate, require_role, init_default_users, require_auth_or_api_key
+from web.auth_user import (
+    login_manager, authenticate, require_role, init_default_users,
+    require_auth_or_api_key, require_operator_or_api_key, generate_csrf_token
+)
 from web.models import User, ROLES
 import yaml
 import os
@@ -56,18 +59,21 @@ def create_app(config: dict = None) -> Flask:
     # Init Flask-Login
     login_manager.init_app(app)
 
-    # Initialize auth service (API key)
+    # Initialize auth service (API key) — for machine scripts only
     api_keys = config.get('auth', {}).get('api_keys', [])
     auth_service = AuthService(api_keys if api_keys else None)
     app.config['auth_service'] = auth_service
-    # Store first API key for frontend (if available)
-    app.config['frontend_api_key'] = api_keys[0] if api_keys else None
 
     # Store in app context
     app.config['controller'] = controller
     app.config['logger'] = logger
 
-    # ── Auth pages (login/logout) ──────────────────────────────
+    # Expose CSRF token to all templates
+    @app.context_processor
+    def inject_csrf():
+        return {'csrf_token': generate_csrf_token()}
+
+    # ── Auth pages (login/logout/change-password) ──────────────
 
     @app.route('/login', methods=['GET', 'POST'])
     def login():
@@ -82,11 +88,44 @@ def create_app(config: dict = None) -> Flask:
             if user and user.is_active:
                 login_user(user, remember=request.form.get('remember'))
                 logger.info(f"User '{username}' logged in")
+                # Fix #3: Force password change on first login
+                if user.needs_password_change:
+                    return redirect(url_for('change_password'))
                 next_page = request.args.get('next')
                 return redirect(next_page if next_page else url_for('index'))
             flash('Неверный логин или пароль', 'error')
 
         return render_template('login.html')
+
+    @app.route('/change-password', methods=['GET', 'POST'])
+    @login_required
+    def change_password():
+        if request.method == 'POST':
+            new_pw = request.form.get('new_password', '')
+            confirm_pw = request.form.get('confirm_password', '')
+
+            if not new_pw or len(new_pw) < 6:
+                flash('Пароль должен быть не менее 6 символов', 'error')
+            elif new_pw != confirm_pw:
+                flash('Пароли не совпадают', 'error')
+            else:
+                db_path = app.config.get('user_db_path')
+                import sqlite3
+                conn = sqlite3.connect(db_path)
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE users SET password_hash = ?, password_changed = 1
+                        WHERE id = ?
+                    ''', (generate_password_hash(new_pw), current_user.id))
+                    conn.commit()
+                    logger.info(f"User '{current_user.username}' changed password")
+                    flash('Пароль успешно изменён', 'success')
+                    return redirect(url_for('index'))
+                finally:
+                    conn.close()
+
+        return render_template('change_password.html')
 
     @app.route('/logout')
     @login_required
@@ -156,23 +195,18 @@ def create_app(config: dict = None) -> Flask:
         conn = sqlite3.connect(db_path)
         try:
             cursor = conn.cursor()
-            updates = []
-            params = []
 
+            # Fix #5: Whitelisted column updates (no f-string SQL)
             if 'role' in data and data['role'] in ROLES:
-                updates.append('role = ?')
-                params.append(data['role'])
+                cursor.execute('UPDATE users SET role = ? WHERE id = ?', (data['role'], user_id))
             if 'password' in data and data['password']:
-                updates.append('password_hash = ?')
-                params.append(generate_password_hash(data['password']))
+                cursor.execute('UPDATE users SET password_hash = ? WHERE id = ?',
+                               (generate_password_hash(data['password']), user_id))
             if 'is_active' in data:
-                updates.append('is_active = ?')
-                params.append(1 if data['is_active'] else 0)
+                cursor.execute('UPDATE users SET is_active = ? WHERE id = ?',
+                               (1 if data['is_active'] else 0, user_id))
 
-            if updates:
-                params.append(user_id)
-                cursor.execute(f'UPDATE users SET {", ".join(updates)} WHERE id = ?', params)
-                conn.commit()
+            conn.commit()
             logger.info(f"User {user_id} updated by '{current_user.username}'")
             return jsonify({'success': True})
         finally:
@@ -203,33 +237,25 @@ def create_app(config: dict = None) -> Flask:
     @login_required
     def index():
         """Main page - orders list."""
-        return render_template('index.html',
-                               api_key=app.config.get('frontend_api_key'),
-                               user=current_user)
+        return render_template('index.html', user=current_user)
 
     @app.route('/tracking')
     @login_required
     def tracking():
         """Station tracking page."""
-        return render_template('tracking.html',
-                               api_key=app.config.get('frontend_api_key'),
-                               user=current_user)
+        return render_template('tracking.html', user=current_user)
 
     @app.route('/station')
     @login_required
     def station():
         """Station detail page — pick a station and see its orders."""
-        return render_template('station.html',
-                               api_key=app.config.get('frontend_api_key'),
-                               user=current_user)
+        return render_template('station.html', user=current_user)
 
     @app.route('/map')
     @login_required
     def map_page():
         """SVG pipeline tracking page."""
-        return render_template('map.html',
-                               api_key=app.config.get('frontend_api_key'),
-                               user=current_user)
+        return render_template('map.html', user=current_user)
 
     # ── API Routes - Protected by login (read-only) ────────────
 
@@ -256,9 +282,11 @@ def create_app(config: dict = None) -> Flask:
         return jsonify(stats)
 
     # ── API Routes - Protected (write operations) ──────────────
+    # Fix #4: All write endpoints require operator+ role (not viewer)
+    # Fix #2: Session users must have valid CSRF token; API key users bypass CSRF
 
     @app.route('/api/orders', methods=['POST'])
-    @require_auth_or_api_key
+    @require_operator_or_api_key
     def api_create_order():
         """Create one or multiple orders."""
         data = request.get_json()
@@ -291,7 +319,7 @@ def create_app(config: dict = None) -> Flask:
         return jsonify(result), 201
 
     @app.route('/api/orders/<int:order_id>/launch', methods=['POST'])
-    @require_auth_or_api_key
+    @require_operator_or_api_key
     def api_launch_order(order_id: int):
         """Launch an order to production."""
         result = controller.launch_order(order_id)
@@ -303,7 +331,7 @@ def create_app(config: dict = None) -> Flask:
             return jsonify(result), 400
 
     @app.route('/api/orders/<int:order_id>/move', methods=['POST'])
-    @require_auth_or_api_key
+    @require_operator_or_api_key
     def api_move_order(order_id: int):
         """Move order to next station."""
         result = controller.move_order(order_id)
@@ -315,7 +343,7 @@ def create_app(config: dict = None) -> Flask:
             return jsonify(result), 400
 
     @app.route('/api/orders/<int:order_id>/complete', methods=['POST'])
-    @require_auth_or_api_key
+    @require_operator_or_api_key
     def api_complete_order(order_id: int):
         """Complete an order manually."""
         result = controller.complete_order(order_id)
@@ -327,7 +355,7 @@ def create_app(config: dict = None) -> Flask:
             return jsonify(result), 400
 
     @app.route('/api/orders/<int:order_id>/cancel', methods=['POST'])
-    @require_auth_or_api_key
+    @require_operator_or_api_key
     def api_cancel_order(order_id: int):
         """Cancel an order."""
         result = controller.cancel_order(order_id)
@@ -337,5 +365,38 @@ def create_app(config: dict = None) -> Flask:
         else:
             logger.warning("POST /api/orders/%d/cancel — FAILED", order_id)
             return jsonify(result), 400
+
+    @app.route('/api/orders/<int:order_id>/complete-sub', methods=['POST'])
+    @require_operator_or_api_key
+    def api_complete_sub(order_id: int):
+        """Complete a sub-station for an order. Body: {sub_station_id: 1.1}."""
+        data = request.get_json()
+        if not data or 'sub_station_id' not in data:
+            return jsonify({'error': 'sub_station_id required'}), 400
+
+        sub_id = float(data['sub_station_id'])
+        result = db.complete_sub_station(order_id, sub_id)
+        if result['success']:
+            logger.info("POST /api/orders/%d/complete-sub %.1f — OK", order_id, sub_id)
+            order = controller.get_order(order_id)
+            result['order'] = order
+            return jsonify(result)
+        else:
+            logger.warning("POST /api/orders/%d/complete-sub %.1f — FAILED", order_id, sub_id)
+            return jsonify(result), 400
+
+    @app.route('/api/sub-stations', methods=['GET'])
+    @login_required
+    def api_get_sub_stations():
+        """Get all sub-stations grouped by parent. For UI rendering."""
+        all_stations = db.get_stations()
+        groups = {}
+        for s in all_stations:
+            main_id = float(int(s['id']))
+            if s['id'] != main_id:
+                if main_id not in groups:
+                    groups[main_id] = {'main_id': main_id, 'subs': []}
+                groups[main_id]['subs'].append(s)
+        return jsonify(list(groups.values()))
 
     return app
