@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>MES - Карта станций</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=8">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🏭 MES Production System</h1>
+            <div class="header-actions">
+                <nav>
+                    <a href="/">Заказы</a>
+                    <a href="/tracking" class="active">Карта станций</a>
+                    <a href="/station">Станция</a>
+                    <a href="/map">Производство</a>
+                    {% if user and user.role == 'admin' %}
+                    <a href="/users">Пользователи</a>
+                    {% endif %}
+                </nav>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="font-size:0.85rem;color:var(--text-secondary);">
+                        {{ user.username }} ({{ user.role_label }})
+                    </span>
+                    <a href="/logout" class="btn btn-sm btn-secondary">Выйти</a>
+                    <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme">🌙</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Stations Grid -->
+        <div class="stations-grid" id="stationsGrid"></div>
+
+        <!-- Order Detail Modal -->
+        <div class="modal-overlay" id="orderModal">
+            <div class="modal">
+                <div class="modal-header">
+                    <h2 id="modalTitle">Заказы на станции</h2>
+                    <button class="modal-close" onclick="window.MESTracking.closeModal()">&times;</button>
+                </div>
+                <div id="modalBody"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="{{ url_for('static', filename='theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script>
+        (function() {
+            const API_BASE = '';
+            var _lastStationId = 0;
+            var _ordersByStation = {};
+
+            // Initialize the global namespace FIRST
+            window.MESTracking = {};
+
+            function escapeHtml(text) {
+                if (!text) return '';
+                var div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+
+            /* ── Load stations ────────────────────────────── */
+
+            function loadStations() {
+                var grid = document.getElementById('stationsGrid');
+                if (!grid) return;
+
+                fetch(API_BASE + '/api/stations')
+                    .then(function(r) { return r.json(); })
+                    .then(function(stations) { renderStations(stations); })
+                    .catch(function(err) {
+                        window.MESUtils.showToast('Ошибка загрузки станций', 'error');
+                        console.error(err);
+                    });
+            }
+
+            function renderStations(stations) {
+                var grid = document.getElementById('stationsGrid');
+                if (!grid) return;
+
+                _lastStationId = stations.reduce(function(max, s) { return Math.max(max, s.id); }, 0);
+                _ordersByStation = {};
+                stations.forEach(function(s) {
+                    _ordersByStation[s.id] = s.orders || [];
+                });
+
+                // Group: main + subs
+                var groups = [];
+                stations.forEach(function(s) {
+                    if (s.id === Math.floor(s.id)) groups.push({ main: s, subs: [] });
+                });
+                stations.forEach(function(s) {
+                    if (s.id !== Math.floor(s.id)) {
+                        var parent = Math.floor(s.id);
+                        for (var i = 0; i < groups.length; i++) {
+                            if (groups[i].main.id === parent) { groups[i].subs.push(s); break; }
+                        }
+                    }
+                });
+                groups.forEach(function(g) { g.subs.sort(function(a, b) { return a.id - b.id; }); });
+
+                var html = '';
+                groups.forEach(function(group) {
+                    var main = group.main;
+                    var mainCount = (main.orders || []).length;
+                    var hasSubs = group.subs.length > 0;
+
+                    // ── One card for main + collapsible sub-stations ──
+                    var card = '<div class="station-card station-group">';
+
+                    // Main station row
+                    if (hasSubs) {
+                        // Has subs: click toggles subs, button opens modal
+                        card += '<div class="station-row main-row" onclick="window.MESTracking.toggleSubs(this)">';
+                    } else {
+                        // No subs: click opens modal directly
+                        card += '<div class="station-row main-row" onclick="window.MESTracking.openModal(' + main.id + ')">';
+                    }
+                    card += '<div style="display:flex;align-items:center;gap:12px;flex:1;">';
+                    card += '<span class="station-number" style="width:44px;height:44px;font-size:1.2rem;">' + Math.floor(main.id) + '</span>';
+                    card += '<div style="flex:1;">';
+                    card += '<div class="station-name">' + escapeHtml(main.name) + '</div>';
+                    card += '<div style="font-size:0.75rem;color:var(--text-secondary);margin-top:2px;">' + mainCount + ' заказ(ов)</div>';
+                    card += '</div></div>';
+
+                    // Chevron icon
+                    if (hasSubs) {
+                        card += '<svg class="chevron" width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">';
+                        card += '<path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+                        card += '</svg>';
+                    }
+                    card += '</div>';
+
+                    // Sub-stations (collapsible)
+                    if (hasSubs) {
+                        card += '<div class="subs-container" style="display:none;">';
+                        group.subs.forEach(function(sub) {
+                            var sCount = (sub.orders || []).length;
+                            card += '<div class="station-row sub-row" onclick="window.MESTracking.openModal(' + sub.id + ')">';
+                            card += '<div style="display:flex;align-items:center;gap:12px;">';
+                            card += '<span class="station-number station-number-sub" style="width:30px;height:30px;font-size:0.8rem;">' + String(sub.id) + '</span>';
+                            card += '<div class="station-name">' + escapeHtml(sub.name) + '</div>';
+                            card += '</div>';
+                            card += '<span style="font-size:0.75rem;color:var(--text-secondary);">' + sCount + ' заказ(ов)</span>';
+                            card += '</div>';
+                        });
+                        card += '</div>';
+                        // Button to open main station modal
+                        card += '<button class="btn btn-sm btn-secondary" style="margin:8px 16px 12px;width:calc(100% - 32px);" onclick="event.stopPropagation();window.MESTracking.openModal(' + main.id + ')">Открыть заказы</button>';
+                    }
+
+                    card += '</div>';
+                    html += card;
+                });
+
+                grid.innerHTML = html;
+            }
+
+            /* ── Modal ────────────────────────────────────── */
+
+            window.MESTracking.toggleSubs = function(rowEl) {
+                var card = rowEl.closest('.station-group');
+                if (!card) return;
+                var container = card.querySelector('.subs-container');
+                if (!container) return;
+                var chevron = rowEl.querySelector('.chevron');
+
+                if (container.style.display === 'none') {
+                    container.style.display = 'block';
+                    if (chevron) chevron.classList.add('open');
+                } else {
+                    container.style.display = 'none';
+                    if (chevron) chevron.classList.remove('open');
+                }
+            };
+
+            window.MESTracking.openModal = async function(stationId) {
+                var orders = _ordersByStation[stationId] || [];
+                var isLast = stationId === _lastStationId;
+                var displayId = stationId === Math.floor(stationId) ? Math.floor(stationId) : stationId;
+                document.getElementById('modalTitle').textContent = 'Станция ' + displayId;
+
+                // Fetch sub-station info for this main station
+                var subsHtml = '';
+                if (stationId === Math.floor(stationId)) {
+                    // Check if this station has sub-stations
+                    var subsResp = await fetch(API_BASE + '/api/sub-stations');
+                    var allSubs = await subsResp.json();
+                    var subsInfo = null;
+                    for (var g = 0; g < allSubs.length; g++) {
+                        if (allSubs[g].main_id === stationId) { subsInfo = allSubs[g]; break; }
+                    }
+                    if (subsInfo) {
+                        subsHtml = '<div style="margin-bottom:16px;padding:12px;background:var(--bg-secondary);border-radius:8px;">';
+                        subsHtml += '<h4 style="margin:0 0 8px 0;font-size:0.9rem;">Подстанции:</h4>';
+                        subsInfo.subs.forEach(function(sub) {
+                            var sid = sub.id;
+                            var sname = sub.name;
+                            subsHtml += '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-color);">';
+                            subsHtml += '<span style="font-size:0.85rem;">' + escapeHtml(sname) + '</span>';
+                            subsHtml += '<span class="sub-status" data-order-id="PLACEHOLDER" data-sub-id="' + sid + '" style="font-size:0.8rem;"></span>';
+                            subsHtml += '</div>';
+                        });
+                        subsHtml += '</div>';
+                    }
+                }
+
+                if (orders.length === 0) {
+                    document.getElementById('modalBody').innerHTML = subsHtml +
+                        '<p style="text-align:center;color:var(--text-secondary);padding:20px 0;">Нет заказов</p>';
+                } else {
+                    var html = subsHtml;
+                    orders.forEach(function(order) {
+                        html += '<div class="station-order" style="margin-bottom:16px;" data-order-id="' + order.id + '">' +
+                            '<h4>' + escapeHtml(order.order_number) + '</h4>' +
+                            '<p>Партия: ' + escapeHtml(order.batch) + '</p>' +
+                            '<p>Товар: ' + escapeHtml(order.product_code) + '</p>' +
+                            '<p>Цвет: ' + escapeHtml(order.color) + '</p>' +
+                            '<p>Кол-во: ' + order.quantity + '</p>' +
+                            '<p>Запущен: ' + (order.started_at ? MESUtils.formatDate(order.started_at) : '—') + '</p>';
+
+                        // Sub-station completion buttons (for main stations with subs)
+                        if (stationId === Math.floor(stationId) && subsHtml) {
+                            var completedSubs = order.completed_subs ? order.completed_subs.split(',').filter(function(x){return x;}).map(parseFloat) : [];
+                            // We need the sub-station list — fetch it
+                        }
+
+                        if (!isLast) {
+                            html += '<button class="btn btn-primary btn-sm" style="width:100%;margin-top:8px;" ' +
+                                'onclick="event.stopPropagation();MESTracking.moveOrder(' + order.id + ')">' +
+                                'Переместить дальше →</button>';
+                        } else {
+                            html += '<button class="btn btn-success btn-sm" style="width:100%;margin-top:8px;" disabled>✓ Завершён</button>';
+                        }
+                        html += '</div>';
+                    });
+                    document.getElementById('modalBody').innerHTML = html;
+
+                    // Now render sub-station buttons per order
+                    if (subsHtml) {
+                        var subsResp2 = await fetch(API_BASE + '/api/sub-stations');
+                        var allSubs2 = await subsResp2.json();
+                        var subsInfo2 = null;
+                        for (var g2 = 0; g2 < allSubs2.length; g2++) {
+                            if (allSubs2[g2].main_id === stationId) { subsInfo2 = allSubs2[g2]; break; }
+                        }
+                        if (subsInfo2) {
+                            orders.forEach(function(order) {
+                                var container = document.querySelector('.station-order[data-order-id="' + order.id + '"]');
+                                if (!container) return;
+                                var completedSubs = order.completed_subs ? order.completed_subs.split(',').filter(function(x){return x;}).map(parseFloat) : [];
+
+                                subsInfo2.subs.forEach(function(sub) {
+                                    var sid = sub.id;
+                                    var isCompleted = completedSubs.indexOf(sid) !== -1;
+                                    var row = container.querySelector('.sub-btn-row[data-sub="' + sid + '"]');
+                                    if (!row) {
+                                        row = document.createElement('div');
+                                        row.className = 'sub-btn-row';
+                                        row.setAttribute('data-sub', sid);
+                                        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:4px 0 4px 16px;';
+                                        container.appendChild(row);
+                                    }
+                                    row.innerHTML = '<span style="font-size:0.8rem;color:var(--text-secondary);margin-right:8px;">' + escapeHtml(sub.name) + '</span>' +
+                                        (isCompleted
+                                            ? '<span style="font-size:0.75rem;color:var(--success);">✓ Завершено</span>'
+                                            : '<button class="btn btn-sm btn-success" onclick="event.stopPropagation();MESTracking.completeSub(' + order.id + ',' + sid + ')">Завершить</button>');
+                                });
+                            });
+                        }
+                    }
+                }
+
+                document.getElementById('orderModal').classList.add('active');
+            };
+
+            window.MESTracking.closeModal = function() {
+                document.getElementById('orderModal').classList.remove('active');
+            };
+
+            // Close modal on overlay click
+            document.getElementById('orderModal').addEventListener('click', function(e) {
+                if (e.target === this) window.MESTracking.closeModal();
+            });
+
+            /* ── Complete sub-station ──────────────────────── */
+
+            async function completeSub(orderId, subStationId) {
+                try {
+                    const response = await fetch(API_BASE + '/api/orders/' + orderId + '/complete-sub', {
+                        method: 'POST',
+                        headers: window.MESUtils.authHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify({ sub_station_id: subStationId })
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                        window.MESUtils.showToast('Подстанция завершена', 'success');
+                        loadStations();
+                        setTimeout(function() {
+                            fetch(API_BASE + '/api/orders?status=production')
+                                .then(function(r) { return r.json(); })
+                                .then(function(orders) {
+                                    for (var i = 0; i < orders.length; i++) {
+                                        if (orders[i].id === orderId) {
+                                            window.MESTracking.openModal(orders[i].current_station);
+                                            break;
+                                        }
+                                    }
+                                });
+                        }, 300);
+                    } else {
+                        window.MESUtils.showToast(result.message || 'Ошибка', 'error');
+                    }
+                } catch (error) {
+                    window.MESUtils.showToast('Ошибка соединения', 'error');
+                }
+            }
+
+            /* ── Move order ────────────────────────────────── */
+
+            async function moveOrder(orderId) {
+                window.MESTracking.closeModal();
+                if (!confirm('Переместить заказ на следующую станцию?')) return;
+
+                try {
+                    const response = await fetch(API_BASE + '/api/orders/' + orderId + '/move', {
+                        method: 'POST',
+                        headers: window.MESUtils.authHeaders()
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                        const msg = result.message || 'Заказ перемещён';
+                        window.MESUtils.showToast(msg.includes('completed') ? 'Заказ завершён!' : msg, 'success');
+                        loadStations();
+                    } else {
+                        // Show the actual error message
+                        window.MESUtils.showToast(result.message || 'Ошибка перемещения', 'error');
+                    }
+                } catch (error) {
+                    window.MESUtils.showToast('Ошибка соединения с сервером', 'error');
+                }
+            }
+
+            /* ── Init ─────────────────────────────────────── */
+
+            document.addEventListener('DOMContentLoaded', function() {
+                window.MESRefresh.start(loadStations, 3000);
+            });
+
+            window.MESTracking.moveOrder = moveOrder;
+            window.MESTracking.loadStations = loadStations;
+            window.MESTracking.completeSub = completeSub;
+        })();
+    </script>
+</body>
+</html>

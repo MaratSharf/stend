@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>MES - Станция</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🏭 MES Production System</h1>
+            <div class="header-actions">
+                <nav>
+                    <a href="/">Заказы</a>
+                    <a href="/tracking">Карта станций</a>
+                    <a href="/station" class="active">Станция</a>
+                    <a href="/map">Производство</a>
+                    {% if user and user.role == 'admin' %}
+                    <a href="/users">Пользователи</a>
+                    {% endif %}
+                </nav>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="font-size:0.85rem;color:var(--text-secondary);">
+                        {{ user.username }} ({{ user.role_label }})
+                    </span>
+                    <a href="/logout" class="btn btn-sm btn-secondary">Выйти</a>
+                    <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme">🌙</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Station selector -->
+        <div class="filter-section">
+            <label for="stationSelect" class="filter-label">Выберите станцию:</label>
+            <select id="stationSelect">
+                <option value="" disabled selected>-- Станция не выбрана --</option>
+            </select>
+        </div>
+
+        <!-- Orders on selected station -->
+        <div id="stationContent">
+            <div class="card station-placeholder">
+                <p>Выберите станцию из списка выше, чтобы увидеть заказы.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="{{ url_for('static', filename='theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script src="{{ url_for('static', filename='station.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+database:
+  path: data/mes.db
+server:
+  host: 0.0.0.0
+  port: 5000
+stations:
+  - name: Приёмка
+    subs:
+      - Приёмка 1.1
+      - Приёмка 1.2
+  - name: Сортировка
+  - name: Подготовка
+    subs:
+      - Подготовка 3.1
+  - name: Сборка
+  - name: Пайка
+  - name: Контроль
+  - name: Тестирование
+  - name: Упаковка
+  - name: Маркировка
+  - name: Отгрузка
+auth:
+  api_keys:
+    - change-me-to-a-secure-key
+logging:
+  level: INFO
+  path: data/logs
