@@ -237,3 +237,4 @@ ssh-keygen -t ed25519 -C "your_email@example.com"
 # Сменить remote на SSH
 git remote set-url origin git@github.com:MaratSharf/stend.git
 ```
+git remote set-url origin https://github.com/MaratSharf/stend.git
