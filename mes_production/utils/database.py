@@ -33,6 +33,26 @@ class Database:
         try:
             cursor = conn.cursor()
 
+            # ── Migration: Add role_permissions table ─────────────
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='role_permissions'")
+            if not cursor.fetchone():
+                self.logger.info("Migration: creating role_permissions table")
+                cursor.execute('''
+                    CREATE TABLE role_permissions (
+                        role TEXT NOT NULL,
+                        permission TEXT NOT NULL,
+                        PRIMARY KEY (role, permission)
+                    )
+                ''')
+                # Insert default permissions
+                from utils.permissions import DEFAULT_ROLE_PERMISSIONS
+                for role, perms in DEFAULT_ROLE_PERMISSIONS.items():
+                    for perm in perms:
+                        cursor.execute(
+                            'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
+                            (role, perm)
+                        )
+
             # ── Migration: INTEGER → REAL for stations ─────────────
             # If old schema exists (id INTEGER), recreate with REAL
             cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='stations'")

@@ -10,9 +10,11 @@ from utils.logger import setup_logger
 from web.auth import AuthService
 from web.auth_user import (
     login_manager, authenticate, require_role, init_default_users,
-    require_auth_or_api_key, require_operator_or_api_key, generate_csrf_token
+    require_auth_or_api_key, require_operator_or_api_key, generate_csrf_token,
+    require_permission, get_user_permissions
 )
-from web.models import User, ROLES
+from utils.permissions import get_all_permissions, get_permission_categories, get_permissions_by_category, CATEGORIES, DEFAULT_ROLE_PERMISSIONS
+from web.models import User, ROLES, ROLE_LABELS
 import yaml
 import os
 
@@ -163,8 +165,20 @@ def create_app(config: dict = None) -> Flask:
             return jsonify({'error': 'username and password required'}), 400
 
         role = data.get('role', 'viewer')
-        if role not in ROLES:
-            return jsonify({'error': f'Invalid role. Choose: {", ".join(ROLES.keys())}'}), 400
+        
+        # Validate role exists in database (built-in or custom)
+        db_path = app.config.get('user_db_path')
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
+            role_exists = cursor.fetchone() is not None
+        finally:
+            conn.close()
+        
+        if not role_exists and role not in ROLES:
+            return jsonify({'error': f'Invalid role. Role "{role}" does not exist'}), 400
 
         db_path = app.config.get('user_db_path')
         import sqlite3
@@ -256,6 +270,243 @@ def create_app(config: dict = None) -> Flask:
     def map_page():
         """SVG pipeline tracking page."""
         return render_template('map.html', user=current_user)
+
+    @app.route('/roles')
+    @login_required
+    @require_role('admin')
+    def roles_page():
+        """Roles management page - configure permissions for each role."""
+        from utils.permissions import get_permission_categories, get_permissions_by_category, CATEGORIES, PERMISSIONS
+        import sqlite3
+        
+        db_path = app.config.get('user_db_path')
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.cursor()
+            
+            # Get ALL roles from database (including custom roles)
+            cursor.execute('SELECT DISTINCT role FROM role_permissions ORDER BY role')
+            all_roles_db = [r['role'] for r in cursor.fetchall()]
+            
+            # Get all permissions for each role
+            role_permissions = {}
+            for role in all_roles_db:
+                cursor.execute('''
+                    SELECT permission FROM role_permissions WHERE role = ? AND permission != ''
+                ''', (role,))
+                role_permissions[role] = [r['permission'] for r in cursor.fetchall()]
+            
+            # Build roles dict: include built-in roles with labels + custom roles
+            roles_dict = dict(ROLE_LABELS)  # Copy built-in roles
+            for role in all_roles_db:
+                if role not in roles_dict:
+                    roles_dict[role] = role.capitalize()  # Custom role label
+        finally:
+            conn.close()
+        
+        categories = get_permission_categories()
+        permissions_by_category = {cat: get_permissions_by_category(cat) for cat in categories}
+        
+        return render_template(
+            'roles.html', 
+            user=current_user, 
+            roles=roles_dict,
+            categories=categories,
+            category_labels=CATEGORIES,
+            permissions_by_category=permissions_by_category,
+            role_permissions=role_permissions
+        )
+
+    # ── API Routes - Role Permissions Management ───────────────
+
+    @app.route('/api/roles/<role>/permissions', methods=['POST'])
+    @login_required
+    @require_role('admin')
+    def api_set_role_permissions(role: str):
+        """Set permissions for a specific role."""
+        # Validate role exists in database (either built-in or custom)
+        db_path = app.config.get('user_db_path')
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            # Check if role exists in role_permissions table (any row, including empty marker)
+            # OR if it's a built-in role
+            cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
+            role_exists = cursor.fetchone() is not None
+        finally:
+            conn.close()
+        
+        if not role_exists and role not in ROLES:
+            return jsonify({'error': f'Invalid role. Role "{role}" does not exist'}), 400
+        
+        data = request.get_json()
+        if not data or 'permissions' not in data:
+            return jsonify({'error': 'permissions array required'}), 400
+        
+        permissions = data['permissions']
+        if not isinstance(permissions, list):
+            return jsonify({'error': 'permissions must be an array'}), 400
+        
+        # Validate all permissions exist
+        from utils.permissions import PERMISSIONS
+        invalid = [p for p in permissions if p not in PERMISSIONS]
+        if invalid:
+            return jsonify({'error': f'Invalid permissions: {", ".join(invalid)}'}), 400
+        
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            
+            # Delete existing permissions for this role (including empty marker)
+            cursor.execute('DELETE FROM role_permissions WHERE role = ?', (role,))
+            
+            # Insert new permissions
+            for perm in permissions:
+                cursor.execute(
+                    'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
+                    (role, perm)
+                )
+            
+            conn.commit()
+            logger.info(f"Permissions for role '{role}' updated by '{current_user.username}'")
+            return jsonify({'success': True, 'permissions': permissions})
+        finally:
+            conn.close()
+
+    @app.route('/api/roles/<role>/permissions/reset', methods=['POST'])
+    @login_required
+    @require_role('admin')
+    def api_reset_role_permissions(role: str):
+        """Reset permissions for a role to defaults."""
+        if role not in ROLES:
+            return jsonify({'error': f'Invalid role. Choose: {", ".join(ROLES.keys())}'}), 400
+        
+        from utils.permissions import DEFAULT_ROLE_PERMISSIONS
+        default_perms = DEFAULT_ROLE_PERMISSIONS.get(role, [])
+        
+        db_path = app.config.get('user_db_path')
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            
+            # Delete existing permissions
+            cursor.execute('DELETE FROM role_permissions WHERE role = ?', (role,))
+            
+            # Insert default permissions
+            for perm in default_perms:
+                cursor.execute(
+                    'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
+                    (role, perm)
+                )
+            
+            conn.commit()
+            logger.info(f"Permissions for role '{role}' reset to defaults by '{current_user.username}'")
+            return jsonify({'success': True, 'permissions': default_perms})
+        finally:
+            conn.close()
+
+    @app.route('/api/roles', methods=['GET'])
+    @login_required
+    def api_get_roles():
+        """Get all roles (built-in + custom)."""
+        import sqlite3
+        db_path = app.config.get('user_db_path')
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.cursor()
+            # Get all roles from role_permissions table
+            cursor.execute('SELECT DISTINCT role FROM role_permissions ORDER BY role')
+            roles_db = [r['role'] for r in cursor.fetchall()]
+            
+            # Get built-in roles
+            roles_list = []
+            for role in ROLES.keys():
+                roles_list.append({
+                    'role': role,
+                    'label': ROLE_LABELS.get(role, role.capitalize()),
+                    'builtin': True
+                })
+            
+            # Add custom roles
+            for role in roles_db:
+                if role not in ROLES:
+                    roles_list.append({
+                        'role': role,
+                        'label': role.capitalize(),
+                        'builtin': False
+                    })
+            
+            return jsonify({'success': True, 'roles': roles_list})
+        finally:
+            conn.close()
+
+    @app.route('/api/roles', methods=['POST'])
+    @login_required
+    @require_role('admin')
+    def api_create_role():
+        """Create a new role with default permissions."""
+        data = request.get_json()
+        if not data or not data.get('role'):
+            return jsonify({'error': 'role name required'}), 400
+        
+        role = data['role'].strip().lower()
+        if not role or not role.isidentifier():
+            return jsonify({'error': 'Invalid role name. Use letters and underscores only'}), 400
+        
+        db_path = app.config.get('user_db_path')
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            
+            # Check if role already exists
+            cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
+            if cursor.fetchone():
+                return jsonify({'error': f'Role "{role}" already exists'}), 400
+            
+            # Insert role with no permissions (just a marker row with empty permission)
+            # Using empty string as marker to indicate role exists but has no permissions
+            cursor.execute('INSERT INTO role_permissions (role, permission) VALUES (?, ?)', (role, ''))
+            
+            conn.commit()
+            logger.info(f"New role '{role}' created by '{current_user.username}'")
+            return jsonify({'success': True, 'role': role, 'permissions': []})
+        except sqlite3.IntegrityError:
+            return jsonify({'error': f'Role "{role}" already exists'}), 400
+        finally:
+            conn.close()
+
+    @app.route('/api/roles/<role>', methods=['DELETE'])
+    @login_required
+    @require_role('admin')
+    def api_delete_role(role: str):
+        """Delete a role."""
+        if role in ('admin', 'operator', 'viewer'):
+            return jsonify({'error': 'Cannot delete built-in roles'}), 403
+        
+        db_path = app.config.get('user_db_path')
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            
+            # Check if role exists
+            cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
+            if not cursor.fetchone():
+                return jsonify({'error': f'Role "{role}" not found'}), 404
+            
+            # Delete role permissions
+            cursor.execute('DELETE FROM role_permissions WHERE role = ?', (role,))
+            
+            conn.commit()
+            logger.info(f"Role '{role}' deleted by '{current_user.username}'")
+            return jsonify({'success': True})
+        finally:
+            conn.close()
 
     # ── API Routes - Protected by login (read-only) ────────────
 

@@ -149,6 +149,7 @@
             'use strict';
 
             window.MESUsers = {};
+            var availableRoles = []; // Loaded from API
 
             function showToast(msg, type) {
                 if (MESUtils.showToast) {
@@ -158,6 +159,36 @@
 
             function authHeaders() {
                 return MESUtils.authHeaders({ 'Content-Type': 'application/json' });
+            }
+
+            // Load roles on page load
+            fetch('/api/roles', { headers: authHeaders() })
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    if (res.success && res.roles) {
+                        availableRoles = res.roles;
+                        populateRoleSelectors();
+                    }
+                })
+                .catch(function () {
+                    console.error('Failed to load roles');
+                });
+
+            function populateRoleSelectors() {
+                var options = availableRoles.map(function (r) {
+                    return '<option value="' + r.role + '">' + r.label + (r.builtin ? '' : ' (custom)') + '</option>';
+                }).join('');
+                
+                // Populate both create and edit selects
+                var createSelect = document.getElementById('createRole');
+                var editSelect = document.getElementById('editRole');
+                
+                if (createSelect) {
+                    createSelect.innerHTML = options;
+                }
+                if (editSelect) {
+                    editSelect.innerHTML = options;
+                }
             }
 
             /* ── Edit modal ─────────────────────────────── */
