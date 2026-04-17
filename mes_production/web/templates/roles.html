@@ -1,0 +1,460 @@
+{% extends "base.html" %}
+{% block title %}MES — Управление ролями{% endblock %}
+{% block content %}
+<div class="container">
+    <header>
+        <h1>🔐 Управление ролями</h1>
+        <div class="header-actions">
+            <button class="btn btn-primary" onclick="showAddRoleModal()">
+                ➕ Добавить роль
+            </button>
+            <a href="/users" class="btn btn-secondary">Пользователи</a>
+        </div>
+    </header>
+
+    <div class="role-selector-section">
+        <label for="roleSelect">Выберите роль:</label>
+        <select id="roleSelect" onchange="loadRolePermissions()">
+            {% for role_key, role_label in roles.items() %}
+            <option value="{{ role_key }}">{{ role_label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div id="roleDetails" class="role-table-wrapper" style="display:none;">
+        <h2 id="roleTitle"></h2>
+        <p class="role-description" id="roleDescription"></p>
+
+        <table class="permissions-table">
+            <thead>
+                <tr>
+                    <th width="20%">Категория</th>
+                    <th width="35%">Разрешение</th>
+                    <th>Описание</th>
+                    <th width="10%">Доступ</th>
+                </tr>
+            </thead>
+            <tbody id="permissionsBody">
+                <!-- Заполняется JS -->
+            </tbody>
+        </table>
+
+        <div class="role-actions">
+            <button class="btn btn-primary" onclick="savePermissions()">
+                💾 Сохранить права
+            </button>
+            <button class="btn btn-secondary" onclick="resetToDefault()">
+                ↺ Сбросить на стандартные
+            </button>
+        </div>
+    </div>
+</div>
+
+<div id="addRoleModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Добавить новую роль</h3>
+            <span class="modal-close" onclick="closeAddRoleModal()">&times;</span>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="newRoleName">Название роли:</label>
+                <input type="text" id="newRoleName" placeholder="Например: manager" pattern="[a-zA-Z_][a-zA-Z0-9_]*" required>
+                <small>Только буквы и подчёркивания, начинать с буквы</small>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeAddRoleModal()">Отмена</button>
+            <button class="btn btn-primary" onclick="createNewRole()">Создать</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+(function() {
+    // Current role being edited
+    let currentRole = null;
+    let rolePermissionsData = {};
+
+    // Role labels from server
+    const roleLabels = {
+        {% for role_key, role_label in roles.items() %}
+        '{{ role_key }}': '{{ role_label }}'{% if not loop.last %},{% endif %}
+        {% endfor %}
+    };
+
+    // Role descriptions from server
+    const roleDescriptions = {
+        {% for role_key, role_label in roles.items() %}
+        '{{ role_key }}': '{% if role_key == "admin" %}Полный доступ ко всем функциям системы{% elif role_key == "operator" %}Операционные действия с заказами и станциями{% else %}Только просмотр данных и статистики{% endif %}'{% if not loop.last %},{% endif %}
+        {% endfor %}
+    };
+
+    // Permissions data from server
+    const permissionsByCategory = {
+        {% for category in categories %}
+        '{{ category }}': [
+            {% for perm in permissions_by_category[category] %}
+            { key: '{{ perm.key }}', label: '{{ perm.label }}', description: '{{ perm.description }}' }{% if not loop.last %},{% endif %}
+            {% endfor %}
+        ]{% if not loop.last %},{% endif %}
+        {% endfor %}
+    };
+
+    // Initial role permissions from server
+    const initialRolePermissions = {
+        {% for role_key in roles.keys() %}
+        '{{ role_key }}': {{ role_permissions.get(role_key, []) | tojson }}{% if not loop.last %},{% endif %}
+        {% endfor %}
+    };
+
+    function showToast(message, type = 'info') {
+        const container = document.getElementById('toastContainer');
+        if (!container) return;
+        
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.textContent = message;
+        container.appendChild(toast);
+        
+        setTimeout(() => toast.remove(), 3000);
+    }
+
+    function authHeaders() {
+        return MESUtils.authHeaders({ 'Content-Type': 'application/json' });
+    }
+
+    window.loadRolePermissions = function() {
+        const select = document.getElementById('roleSelect');
+        currentRole = select.value;
+        
+        // Update UI
+        document.getElementById('roleDetails').style.display = 'block';
+        document.getElementById('roleTitle').textContent = roleLabels[currentRole] || currentRole;
+        document.getElementById('roleDescription').textContent = roleDescriptions[currentRole] || '';
+        
+        // Render permissions table
+        renderPermissionsTable();
+    }
+
+    function renderPermissionsTable() {
+        const tbody = document.getElementById('permissionsBody');
+        const permissions = permissionsByCategory;
+        const currentPermissions = initialRolePermissions[currentRole] || [];
+        
+        let html = '';
+        for (const category in permissions) {
+            for (const perm of permissions[category]) {
+                const checked = currentPermissions.includes(perm.key) ? 'checked' : '';
+                const status = checked ? '✓' : '—';
+                const activeClass = checked ? 'perm-active' : '';
+                
+                html += `
+                    <tr class="perm-row perm-${category} ${activeClass}">
+                        <td>${getCategoryLabel(category)}</td>
+                        <td>
+                            <label class="perm-label">
+                                <input type="checkbox" 
+                                       name="role_perms" 
+                                       value="${perm.key}"
+                                       ${checked}>
+                                ${perm.label}
+                            </label>
+                        </td>
+                        <td>${perm.description}</td>
+                        <td class="perm-status">${status}</td>
+                    </tr>
+                `;
+            }
+        }
+        tbody.innerHTML = html;
+    }
+
+    function getCategoryLabel(category) {
+        const labels = {
+            {% for category, label in category_labels.items() %}
+            '{{ category }}': '{{ label }}'{% if not loop.last %},{% endif %}
+            {% endfor %}
+        };
+        return labels[category] || category;
+    }
+
+    window.showAddRoleModal = function() {
+        document.getElementById('addRoleModal').style.display = 'flex';
+        document.getElementById('newRoleName').focus();
+    };
+
+    function closeAddRoleModal() {
+        document.getElementById('addRoleModal').style.display = 'none';
+        document.getElementById('newRoleName').value = '';
+    }
+
+    window.createNewRole = async function() {
+        const roleName = document.getElementById('newRoleName').value.trim();
+        
+        if (!roleName) {
+            showToast('Введите название роли', 'error');
+            return;
+        }
+        
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(roleName)) {
+            showToast('Неверный формат. Используйте только буквы и подчёркивания', 'error');
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/roles', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ role: roleName })
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                showToast(`Роль "${roleName}" создана`, 'success');
+                closeAddRoleModal();
+                
+                // Add new role to dropdown
+                const select = document.getElementById('roleSelect');
+                const option = document.createElement('option');
+                option.value = roleName;
+                option.textContent = roleName;
+                select.appendChild(option);
+                
+                // Select the new role and load its permissions
+                select.value = roleName;
+                loadRolePermissions();
+                
+                // Initialize new role in data
+                initialRolePermissions[roleName] = [];
+            } else {
+                showToast(data.error || 'Ошибка создания', 'error');
+            }
+        } catch (error) {
+            showToast('Ошибка соединения', 'error');
+        }
+    };
+
+    window.savePermissions = async function() {
+        if (!currentRole) return;
+        
+        const checkboxes = document.querySelectorAll(`input[name="role_perms"]:checked`);
+        const permissions = Array.from(checkboxes).map(cb => cb.value);
+
+        try {
+            const response = await fetch(`/api/roles/${currentRole}/permissions`, {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ permissions })
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                showToast('Права успешно сохранены', 'success');
+                // Update initial data
+                initialRolePermissions[currentRole] = permissions;
+                // Update status indicators
+                updateStatusIndicators();
+            } else {
+                showToast(data.error || 'Ошибка сохранения', 'error');
+            }
+        } catch (error) {
+            showToast('Ошибка соединения', 'error');
+        }
+    };
+
+    function updateStatusIndicators() {
+        const checkboxes = document.querySelectorAll('input[name="role_perms"]');
+        checkboxes.forEach(cb => {
+            const row = cb.closest('tr');
+            const statusCell = row.querySelector('.perm-status');
+            if (cb.checked) {
+                statusCell.textContent = '✓';
+                row.classList.add('perm-active');
+            } else {
+                statusCell.textContent = '—';
+                row.classList.remove('perm-active');
+            }
+        });
+    }
+
+    window.resetToDefault = async function() {
+        if (!currentRole) return;
+        if (!confirm(`Сбросить права "${roleLabels[currentRole]}" к стандартным?`)) return;
+
+        try {
+            const response = await fetch(`/api/roles/${currentRole}/permissions/reset`, {
+                method: 'POST',
+                headers: authHeaders()
+            });
+
+            const data = await response.json();
+            if (response.ok) {
+                showToast('Права сброшены к стандартным', 'success');
+                initialRolePermissions[currentRole] = data.permissions;
+                renderPermissionsTable();
+            } else {
+                showToast(data.error || 'Ошибка сброса', 'error');
+            }
+        } catch (error) {
+            showToast('Ошибка соединения', 'error');
+        }
+    };
+
+    // Close modal on outside click
+    document.getElementById('addRoleModal').addEventListener('click', function(e) {
+        if (e.target === this) closeAddRoleModal();
+    });
+
+    // Load first role on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log('=== DEBUG: Initial Data ===');
+        console.log('roleLabels:', roleLabels);
+        console.log('rolePermissions:', initialRolePermissions);
+        console.log('permissionsByCategory:', permissionsByCategory);
+        console.log('categoryLabels:', getCategoryLabel('orders'));
+        
+        if (document.getElementById('roleSelect').options.length > 0) {
+            console.log('Loading first role:', document.getElementById('roleSelect').value);
+            loadRolePermissions();
+        } else {
+            console.error('No roles found in select!');
+        }
+    });
+})();
+</script>
+
+<style>
+.role-selector-section {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 2rem;
+    padding: 1rem;
+    background: var(--bg-card);
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.role-selector-section label {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.role-selector-section select {
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 1rem;
+    min-width: 200px;
+    cursor: pointer;
+}
+
+.role-selector-section select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.role-table-wrapper {
+    margin-bottom: 2rem;
+    padding: 1.5rem;
+    background: var(--card-bg);
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.role-table-wrapper h2 {
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.role-description {
+    color: var(--text-secondary);
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+}
+
+.permissions-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1.5rem;
+    background: var(--bg-secondary);
+}
+
+.permissions-table th,
+.permissions-table td {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.permissions-table th {
+    background: var(--bg-tertiary);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.permissions-table tr:last-child td {
+    border-bottom: none;
+}
+
+.permissions-table tr:hover {
+    background: var(--hover-bg);
+}
+
+.perm-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+}
+
+.perm-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+.perm-status {
+    text-align: center;
+    font-weight: bold;
+    color: var(--success-color);
+}
+
+.perm-row.perm-active {
+    background: rgba(76, 175, 80, 0.05);
+}
+
+.role-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+    .permissions-table {
+        font-size: 0.85rem;
+    }
+    
+    .permissions-table th,
+    .permissions-table td {
+        padding: 0.5rem;
+    }
+    
+    .role-actions {
+        flex-direction: column;
+    }
+    
+    .role-selector-section {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+</style>
+{% endblock %}

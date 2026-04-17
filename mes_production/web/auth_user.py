@@ -7,6 +7,7 @@ Provides:
   - authenticate(username, password) helper
   - require_role decorator
   - require_operator_role — write endpoints require operator+
+1  - require_permission decorator — permission-based access control
   - CSRF token generation/validation
   - init_default_users() — creates admin if no users exist
 """
@@ -15,12 +16,93 @@ import functools
 import hashlib
 import os
 import time
-from typing import Optional
+from typing import Optional, List
 
-from flask import abort, redirect, request, url_for, session
+from flask import abort, redirect, request, url_for, session, jsonify as flask_jsonify
 from flask_login import LoginManager, current_user
 
 from web.models import User
+from utils.permissions import PERMISSIONS
+
+
+def get_user_permissions(user_id: int) -> List[str]:
+    """
+    Get all permission keys for a user based on their role.
+    Returns list of permission strings from role_permissions table.
+    """
+    from flask import current_app
+    db_path = current_app.config.get('user_db_path')
+    if not db_path:
+        return []
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        # Get user's role
+        cursor.execute('SELECT role FROM users WHERE id = ?', (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            return []
+        
+        role = row['role']
+        
+        # Get permissions for this role from role_permissions table
+        cursor.execute('''
+            SELECT permission FROM role_permissions WHERE role = ?
+        ''', (role,))
+        return [r['permission'] for r in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def user_has_permission(user_id: int, permission: str) -> bool:
+    """
+    Check if a user has a specific permission.
+    Admin users always have all permissions.
+    """
+    if current_user.is_authenticated and current_user.has_role('admin'):
+        return True
+    
+    if permission in PERMISSIONS:
+        permissions = get_user_permissions(user_id)
+        return permission in permissions
+    return False
+
+
+def require_permission(permission: str):
+    """
+    Decorator: requires the user to have a specific permission.
+    
+    Usage:
+        @app.route('/api/orders', methods=['POST'])
+        @login_required
+        @require_permission('create_order')
+        def api_create_order(): ...
+    """
+    def decorator(f):
+        @functools.wraps(f)
+        def decorated_function(*args, **kwargs):
+            if not current_user.is_authenticated:
+                if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                    return jsonify_error('Unauthorized', 401)
+                return redirect(url_for('login'))
+            
+            if not user_has_permission(current_user.id, permission):
+                if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                    return jsonify_error(f'Forbidden: {permission} permission required', 403)
+                abort(403)
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
+
+# ── Flask-Login setup ─────────────────────────────────────────
+    if permission in PERMISSIONS:
+        # Permission exists in system, check database
+        permissions = get_user_permissions(user_id)
+        return permission in permissions
+    return False
 
 
 # ── Flask-Login setup ─────────────────────────────────────────
@@ -213,7 +295,26 @@ def init_default_users(db_path: str):
     try:
         cursor = conn.cursor()
 
-        # ── Create table first (always) ─────────────────────────
+        # ── Create role_permissions table ───────────────────────
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='role_permissions'")
+        if not cursor.fetchone():
+            cursor.execute('''
+                CREATE TABLE role_permissions (
+                    role TEXT NOT NULL,
+                    permission TEXT NOT NULL,
+                    PRIMARY KEY (role, permission)
+                )
+            ''')
+            # Insert default permissions
+            from utils.permissions import DEFAULT_ROLE_PERMISSIONS
+            for role, perms in DEFAULT_ROLE_PERMISSIONS.items():
+                for perm in perms:
+                    cursor.execute(
+                        'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
+                        (role, perm)
+                    )
+
+        # ── Create users table ──────────────────────────────────
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -244,6 +345,6 @@ def init_default_users(db_path: str):
                 INSERT INTO users (username, password_hash, role, password_changed, created_at)
                 VALUES (?, ?, 'admin', 0, ?)
             ''', ('admin', admin_hash, datetime.now().isoformat()))
-            conn.commit()
+        conn.commit()
     finally:
         conn.close()

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>{% block title %}MES{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🏭 MES Production System</h1>
+            <div class="header-actions">
+                <nav>
+                    <a href="/" {% if request.endpoint == 'index' %}class="active"{% endif %}>Заказы</a>
+                    <a href="/tracking" {% if request.endpoint == 'tracking' %}class="active"{% endif %}>Карта станций</a>
+                    <a href="/station" {% if request.endpoint == 'station' %}class="active"{% endif %}>Станция</a>
+                    <a href="/map" {% if request.endpoint == 'map_page' %}class="active"{% endif %}>Производство</a>
+                    {% if user and user.role == 'admin' %}
+                    <a href="/users" {% if request.endpoint == 'users_page' %}class="active"{% endif %}>Пользователи</a>
+                    <a href="/roles" {% if request.endpoint == 'roles_page' %}class="active"{% endif %}>Роли</a>
+                    {% endif %}
+                </nav>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="font-size:0.85rem;color:var(--text-secondary);">
+                        {{ user.username }} ({{ user.role_label }})
+                    </span>
+                    <a href="/logout" class="btn btn-sm btn-secondary">Выйти</a>
+                    <button id="themeToggle" class="theme-toggle" aria-label="Toggle theme">🌙</button>
+                </div>
+            </div>
+        </header>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="flash flash-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+
+        <footer>
+            <small>MES Production System v0.6.3</small>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
