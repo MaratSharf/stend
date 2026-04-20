@@ -61,8 +61,20 @@ def user_has_permission(user_id: int, permission: str) -> bool:
     Check if a user has a specific permission.
     Admin users always have all permissions.
     """
-    if current_user.is_authenticated and current_user.has_role('admin'):
-        return True
+    # First check if user is admin by looking up their role in DB
+    from flask import current_app
+    db_path = current_app.config.get('user_db_path')
+    if db_path:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT role FROM users WHERE id = ?', (user_id,))
+            row = cursor.fetchone()
+            if row and row['role'] == 'admin':
+                return True
+        finally:
+            conn.close()
     
     if permission in PERMISSIONS:
         permissions = get_user_permissions(user_id)
