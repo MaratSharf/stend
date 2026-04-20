@@ -29,6 +29,13 @@ PERMISSIONS = {
         'parent': None,
         'screen_id': 'map'
     },
+    'station_view': {
+        'label': 'Экран: Станции',
+        'description': 'Доступ к странице трекинга станций',
+        'category': 'screens',
+        'parent': None,
+        'screen_id': 'tracking'
+    },
     'user_view': {
         'label': 'Экран: Пользователи',
         'description': 'Доступ к странице управления пользователями',
@@ -153,6 +160,11 @@ SCREENS = {
         'main_permission': 'map_view',
         'operations': []
     },
+    'tracking': {
+        'label': 'Трекинг станций',
+        'main_permission': 'station_view',
+        'operations': ['manage_stations']
+    },
     'users': {
         'label': 'Пользователи',
         'main_permission': 'user_view',
@@ -186,12 +198,14 @@ DEFAULT_ROLE_PERMISSIONS: Dict[str, List[str]] = {
         'order_view',
         'production_view',
         'map_view',
+        'station_view',
         'view_statistics',
     ],
     'operator': [
         'order_view',
         'production_view',
         'map_view',
+        'station_view',
         'create_order',
         'launch_order',
         'move_order',
