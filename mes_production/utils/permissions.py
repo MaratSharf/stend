@@ -5,76 +5,123 @@ Defines available permissions and provides helpers for checking user access.
 from typing import List, Dict, Any, Set
 
 # Define all available permissions in the system
+# Each permission is linked to a screen (parent_permission)
 PERMISSIONS = {
-    'view_orders': {
-        'label': 'Просмотр заказов',
-        'description': 'Просмотр списка и деталей заказов',
-        'category': 'orders'
+    # Screen access permissions (parent permissions)
+    'order_view': {
+        'label': 'Экран: Заказы',
+        'description': 'Доступ к странице заказов',
+        'category': 'screens',
+        'parent': None,
+        'screen_id': 'orders'
     },
+    'station_view': {
+        'label': 'Экраны: Станции',
+        'description': 'Доступ к страницам станций (Карта, Станция, Производство)',
+        'category': 'screens',
+        'parent': None,
+        'screen_id': 'stations'
+    },
+    'user_view': {
+        'label': 'Экран: Пользователи',
+        'description': 'Доступ к странице управления пользователями',
+        'category': 'screens',
+        'parent': None,
+        'screen_id': 'users'
+    },
+    'role_view': {
+        'label': 'Экран: Роли',
+        'description': 'Доступ к странице управления ролями',
+        'category': 'screens',
+        'parent': None,
+        'screen_id': 'roles'
+    },
+    # Order operations (children of order_view)
     'create_order': {
         'label': 'Создание заказов',
         'description': 'Создание новых производственных заказов',
-        'category': 'orders'
+        'category': 'orders',
+        'parent': 'order_view',
+        'screen_id': 'orders'
     },
     'launch_order': {
         'label': 'Запуск в производство',
         'description': 'Запуск заказа в производственный процесс',
-        'category': 'orders'
+        'category': 'orders',
+        'parent': 'order_view',
+        'screen_id': 'orders'
     },
     'move_order': {
         'label': 'Перемещение заказов',
         'description': 'Перемещение заказа между станциями',
-        'category': 'orders'
+        'category': 'orders',
+        'parent': 'order_view',
+        'screen_id': 'orders'
     },
     'complete_order': {
         'label': 'Завершение заказа',
         'description': 'Ручное завершение заказа',
-        'category': 'orders'
+        'category': 'orders',
+        'parent': 'order_view',
+        'screen_id': 'orders'
     },
     'cancel_order': {
         'label': 'Отмена заказа',
         'description': 'Отмена заказа в любом статусе',
-        'category': 'orders'
+        'category': 'orders',
+        'parent': 'order_view',
+        'screen_id': 'orders'
     },
-    'view_stations': {
-        'label': 'Просмотр станций',
-        'description': 'Просмотр статуса рабочих станций',
-        'category': 'stations'
-    },
+    # Station operations (children of station_view)
     'manage_stations': {
         'label': 'Управление станциями',
         'description': 'Настройка конфигурации станций',
-        'category': 'stations'
+        'category': 'stations',
+        'parent': 'station_view',
+        'screen_id': 'stations'
     },
+    # Statistics and data (standalone or children)
     'view_statistics': {
         'label': 'Просмотр статистики',
         'description': 'Просмотр производственной статистики',
-        'category': 'statistics'
+        'category': 'statistics',
+        'parent': None,
+        'screen_id': 'statistics'
     },
     'export_data': {
         'label': 'Экспорт данных',
         'description': 'Экспорт данных в CSV/Excel',
-        'category': 'data'
+        'category': 'data',
+        'parent': None,
+        'screen_id': 'data'
     },
+    # Admin operations (children of user_view/role_view)
     'manage_users': {
         'label': 'Управление пользователями',
         'description': 'Создание, редактирование и удаление пользователей',
-        'category': 'admin'
+        'category': 'admin',
+        'parent': 'user_view',
+        'screen_id': 'users'
     },
     'manage_roles': {
         'label': 'Управление ролями',
         'description': 'Настройка прав для ролей пользователей',
-        'category': 'admin'
+        'category': 'admin',
+        'parent': 'role_view',
+        'screen_id': 'roles'
     },
     'view_logs': {
         'label': 'Просмотр логов',
         'description': 'Просмотр системных логов',
-        'category': 'admin'
+        'category': 'admin',
+        'parent': None,
+        'screen_id': 'logs'
     },
 }
 
 # Permission categories for UI grouping
 CATEGORIES = {
+    'screens': 'Экраны',
     'orders': 'Заказы',
     'stations': 'Станции',
     'statistics': 'Статистика',
@@ -82,21 +129,59 @@ CATEGORIES = {
     'admin': 'Администрирование',
 }
 
+# Screen structure for UI (ordered list of screens with their operations)
+SCREENS = {
+    'orders': {
+        'label': 'Заказы',
+        'main_permission': 'order_view',
+        'operations': ['create_order', 'launch_order', 'move_order', 'complete_order', 'cancel_order']
+    },
+    'stations': {
+        'label': 'Станции',
+        'main_permission': 'station_view',
+        'operations': ['manage_stations']
+    },
+    'users': {
+        'label': 'Пользователи',
+        'main_permission': 'user_view',
+        'operations': ['manage_users']
+    },
+    'roles': {
+        'label': 'Роли',
+        'main_permission': 'role_view',
+        'operations': ['manage_roles']
+    },
+    'statistics': {
+        'label': 'Статистика',
+        'main_permission': 'view_statistics',
+        'operations': []
+    },
+    'data': {
+        'label': 'Данные',
+        'main_permission': 'export_data',
+        'operations': []
+    },
+    'logs': {
+        'label': 'Логи',
+        'main_permission': 'view_logs',
+        'operations': []
+    },
+}
+
 # Default role permission assignments
 DEFAULT_ROLE_PERMISSIONS: Dict[str, List[str]] = {
     'viewer': [
-        'view_orders',
-        'view_stations',
-        'view_statistics',
+        'order_view',
+        'station_view',
     ],
     'operator': [
-        'view_orders',
+        'order_view',
+        'station_view',
         'create_order',
         'launch_order',
         'move_order',
         'complete_order',
         'cancel_order',
-        'view_stations',
         'view_statistics',
     ],
     'admin': list(PERMISSIONS.keys()),  # All permissions
