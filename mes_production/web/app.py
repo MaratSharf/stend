@@ -15,6 +15,7 @@ from web.auth_user import (
 )
 from utils.permissions import get_all_permissions, get_permission_categories, get_permissions_by_category, CATEGORIES, DEFAULT_ROLE_PERMISSIONS
 from web.models import User, ROLES, ROLE_LABELS
+from utils.role_service import RoleService
 import yaml
 import os
 
@@ -65,10 +66,15 @@ def create_app(config: dict = None) -> Flask:
     api_keys = config.get('auth', {}).get('api_keys', [])
     auth_service = AuthService(api_keys if api_keys else None)
     app.config['auth_service'] = auth_service
+    
+    # Initialize role service
+    role_service = RoleService(user_db_path)
+    app.config['role_service'] = role_service
 
     # Store in app context
     app.config['controller'] = controller
     app.config['logger'] = logger
+    app.config['role_service'] = role_service
 
     # Expose CSRF token to all templates
     @app.context_processor
