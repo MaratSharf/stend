@@ -52,6 +52,11 @@ class User(UserMixin):
         """Check if user has at least the given role level."""
         return ROLES.get(self.role, 0) >= ROLES.get(role, 0)
 
+    def has_permission(self, permission: str) -> bool:
+        """Check if user has a specific permission."""
+        from web.auth_user import user_has_permission
+        return user_has_permission(self.id, permission)
+
     @property
     def role_label(self) -> str:
         return ROLE_LABELS.get(self.role, self.role)

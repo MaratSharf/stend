@@ -249,34 +249,41 @@ def create_app(config: dict = None) -> Flask:
 
     @app.route('/')
     @login_required
+    @require_permission('order_view')
     def index():
         """Main page - orders list."""
         return render_template('index.html', user=current_user)
 
     @app.route('/tracking')
     @login_required
+    @require_permission('station_view')
     def tracking():
         """Station tracking page."""
         return render_template('tracking.html', user=current_user)
 
     @app.route('/station')
     @login_required
+    @require_permission('station_view')
     def station():
         """Station detail page — pick a station and see its orders."""
         return render_template('station.html', user=current_user)
 
     @app.route('/map')
     @login_required
+    @require_permission('station_view')
     def map_page():
         """SVG pipeline tracking page."""
         return render_template('map.html', user=current_user)
 
     @app.route('/roles')
     @login_required
-    @require_role('admin')
+    @require_permission('role_view')
     def roles_page():
         """Roles management page - configure permissions for each role."""
-        from utils.permissions import get_permission_categories, get_permissions_by_category, CATEGORIES, PERMISSIONS
+        from utils.permissions import (
+            get_permission_categories, get_permissions_by_category, 
+            CATEGORIES, PERMISSIONS, SCREENS
+        )
         import sqlite3
         
         db_path = app.config.get('user_db_path')
@@ -315,7 +322,9 @@ def create_app(config: dict = None) -> Flask:
             categories=categories,
             category_labels=CATEGORIES,
             permissions_by_category=permissions_by_category,
-            role_permissions=role_permissions
+            role_permissions=role_permissions,
+            screens=SCREENS,
+            all_permissions=PERMISSIONS
         )
 
     # ── API Routes - Role Permissions Management ───────────────
