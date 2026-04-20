@@ -42,7 +42,7 @@
 </div>
 
 <div id="addRoleModal" class="modal" style="display:none;">
-    <div class="modal-content">
+    <div class="modal-content modal-large">
         <div class="modal-header">
             <h3>Добавить новую роль</h3>
             <span class="modal-close" onclick="closeAddRoleModal()">&times;</span>
@@ -52,6 +52,69 @@
                 <label for="newRoleName">Название роли:</label>
                 <input type="text" id="newRoleName" placeholder="Например: manager" pattern="[a-zA-Z_][a-zA-Z0-9_]*" required>
                 <small>Только буквы и подчёркивания, начинать с буквы</small>
+            </div>
+
+            <div class="form-group">
+                <label>Права доступа:</label>
+                <div class="role-permissions-select">
+                    <div class="permission-presets">
+                        <button type="button" class="btn btn-secondary" onclick="setPreset('viewer')">
+                            👁️ Viewer (только просмотр)
+                        </button>
+                        <button type="button" class="btn btn-primary" onclick="setPreset('operator')">
+                            ⚙️ Operator (операционные действия)
+                        </button>
+                        <button type="button" class="btn btn-success" onclick="setPreset('custom')">
+                            ⚙️ Настроить вручную
+                        </button>
+                    </div>
+                    <div id="customPermissions" class="custom-permissions" style="display:none;">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="perm_order_view" value="order_view" checked>
+                            <span>Экран: Заказы</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="perm_production_view" value="production_view" checked>
+                            <span>Экран: Производство</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="perm_map_view" value="map_view" checked>
+                            <span>Экран: Карта станций</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="perm_create_order" value="create_order">
+                            <span>Создание заказов</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="perm_launch_order" value="launch_order">
+                            <span>Запуск в производство</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="perm_move_order" value="move_order">
+                            <span>Перемещение заказов</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="perm_complete_order" value="complete_order">
+                            <span>Завершение заказа</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="perm_cancel_order" value="cancel_order">
+                            <span>Отмена заказа</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="perm_view_statistics" value="view_statistics">
+                            <span>Просмотр статистики</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="perm_user_view" value="user_view">
+                            <span>Экран: Пользователи</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="perm_role_view" value="role_view">
+                            <span>Экран: Роли</span>
+                        </label>
+                    </div>
+                </div>
             </div>
         </div>
         <div class="modal-footer">
@@ -260,6 +323,43 @@
     function closeAddRoleModal() {
         document.getElementById('addRoleModal').style.display = 'none';
         document.getElementById('newRoleName').value = '';
+        document.getElementById('customPermissions').style.display = 'none';
+        document.querySelectorAll('#customPermissions input[type="checkbox"]').forEach(cb => {
+            cb.checked = false;
+        });
+    }
+
+    // Preset permission sets
+    const PERMISSION_PRESETS = {
+        viewer: ['order_view', 'production_view', 'map_view', 'view_statistics'],
+        operator: ['order_view', 'production_view', 'map_view', 'create_order', 'launch_order', 'move_order', 'complete_order', 'cancel_order', 'view_statistics'],
+        custom: null
+    };
+
+    window.setPreset = function(preset) {
+        const customDiv = document.getElementById('customPermissions');
+        
+        if (preset === 'custom') {
+            customDiv.style.display = 'block';
+        } else {
+            customDiv.style.display = 'none';
+            const perms = PERMISSION_PRESETS[preset];
+            // Uncheck all
+            document.querySelectorAll('#customPermissions input[type="checkbox"]').forEach(cb => {
+                cb.checked = false;
+            });
+            // Check selected
+            perms.forEach(perm => {
+                const cb = document.getElementById('perm_' + perm);
+                if (cb) cb.checked = true;
+            });
+        }
+    };
+
+    function getSelectedPermissions() {
+        const customDiv = document.getElementById('customPermissions');
+        const checkboxes = customDiv.querySelectorAll('input[type="checkbox"]:checked');
+        return Array.from(checkboxes).map(cb => cb.value);
     }
 
     window.createNewRole = async function() {
@@ -275,16 +375,18 @@
             return;
         }
 
+        const permissions = getSelectedPermissions();
+
         try {
             const response = await fetch('/api/roles', {
                 method: 'POST',
                 headers: authHeaders(),
-                body: JSON.stringify({ role: roleName })
+                body: JSON.stringify({ role: roleName, permissions: permissions })
             });
 
             const data = await response.json();
             if (response.ok) {
-                showToast(`Роль "${roleName}" создана`, 'success');
+                showToast(`Роль "${roleName}" создана с ${permissions.length} правами`, 'success');
                 closeAddRoleModal();
                 
                 const select = document.getElementById('roleSelect');
@@ -296,7 +398,7 @@
                 select.value = roleName;
                 loadRolePermissions();
                 
-                initialRolePermissions[roleName] = [];
+                initialRolePermissions[roleName] = permissions;
             } else {
                 showToast(data.error || 'Ошибка создания', 'error');
             }
@@ -307,30 +409,6 @@
 
     document.getElementById('addRoleModal').addEventListener('click', function(e) {
         if (e.target === this) closeAddRoleModal();
-    });
-
-    // Add screen section data attributes after render
-    const originalRenderScreens = renderScreens;
-    renderScreens = function() {
-        originalRenderScreens();
-        // Add data-screen attributes
-        document.querySelectorAll('.screen-section').forEach(section => {
-            const checkbox = section.querySelector('.screen-main-checkbox');
-            if (checkbox) {
-                const screenKey = Object.keys(screensData).find(key => 
-                    screensData[key].main_permission === checkbox.value
-                );
-                if (screenKey) {
-                    section.setAttribute('data-screen', screenKey);
-                }
-            }
-        });
-    };
-
-    document.addEventListener('DOMContentLoaded', function() {
-        if (document.getElementById('roleSelect').options.length > 0) {
-            loadRolePermissions();
-        }
     });
 })();
 </script>
@@ -504,6 +582,54 @@
         flex-direction: column;
         align-items: stretch;
     }
+}
+
+/* Modal styles */
+.modal-large {
+    max-width: 700px;
+}
+
+.permission-presets {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.permission-presets .btn {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+}
+
+.custom-permissions {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 0.5rem;
+    padding: 1rem;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem;
+    cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--success-color);
+    cursor: pointer;
+}
+
+.checkbox-label span {
+    color: var(--text-primary);
+    font-size: 0.9rem;
 }
 </style>
 {% endblock %}

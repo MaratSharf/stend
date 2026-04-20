@@ -15,12 +15,19 @@ PERMISSIONS = {
         'parent': None,
         'screen_id': 'orders'
     },
-    'station_view': {
-        'label': 'Экраны: Станции',
-        'description': 'Доступ к страницам станций (Карта, Станция, Производство)',
+    'production_view': {
+        'label': 'Экран: Производство',
+        'description': 'Доступ к странице производства (статус заказов на станциях)',
         'category': 'screens',
         'parent': None,
-        'screen_id': 'stations'
+        'screen_id': 'production'
+    },
+    'map_view': {
+        'label': 'Экран: Карта станций',
+        'description': 'Доступ к SVG-карте производственного конвейера',
+        'category': 'screens',
+        'parent': None,
+        'screen_id': 'map'
     },
     'user_view': {
         'label': 'Экран: Пользователи',
@@ -136,10 +143,15 @@ SCREENS = {
         'main_permission': 'order_view',
         'operations': ['create_order', 'launch_order', 'move_order', 'complete_order', 'cancel_order']
     },
-    'stations': {
-        'label': 'Станции',
-        'main_permission': 'station_view',
-        'operations': ['manage_stations']
+    'production': {
+        'label': 'Производство',
+        'main_permission': 'production_view',
+        'operations': []
+    },
+    'map': {
+        'label': 'Карта станций',
+        'main_permission': 'map_view',
+        'operations': []
     },
     'users': {
         'label': 'Пользователи',
@@ -172,11 +184,14 @@ SCREENS = {
 DEFAULT_ROLE_PERMISSIONS: Dict[str, List[str]] = {
     'viewer': [
         'order_view',
-        'station_view',
+        'production_view',
+        'map_view',
+        'view_statistics',
     ],
     'operator': [
         'order_view',
-        'station_view',
+        'production_view',
+        'map_view',
         'create_order',
         'launch_order',
         'move_order',
