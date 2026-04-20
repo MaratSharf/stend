@@ -15,6 +15,7 @@ from web.auth_user import (
 )
 from utils.permissions import get_all_permissions, get_permission_categories, get_permissions_by_category, CATEGORIES, DEFAULT_ROLE_PERMISSIONS
 from web.models import User, ROLES, ROLE_LABELS
+from utils.role_service import RoleService
 import yaml
 import os
 
@@ -65,10 +66,15 @@ def create_app(config: dict = None) -> Flask:
     api_keys = config.get('auth', {}).get('api_keys', [])
     auth_service = AuthService(api_keys if api_keys else None)
     app.config['auth_service'] = auth_service
+    
+    # Initialize role service
+    role_service = RoleService(user_db_path)
+    app.config['role_service'] = role_service
 
     # Store in app context
     app.config['controller'] = controller
     app.config['logger'] = logger
+    app.config['role_service'] = role_service
 
     # Expose CSRF token to all templates
     @app.context_processor
@@ -94,7 +100,13 @@ def create_app(config: dict = None) -> Flask:
                 if user.needs_password_change:
                     return redirect(url_for('change_password'))
                 next_page = request.args.get('next')
-                return redirect(next_page if next_page else url_for('index'))
+                if next_page:
+                    return redirect(next_page)
+                # Redirect users with production_view permission to station page
+                # Use user_has_permission after login_user so current_user is set
+                if user.has_role('admin') or user_has_permission(user.id, 'production_view'):
+                    return redirect(url_for('station'))
+                return redirect(url_for('index'))
             flash('Неверный логин или пароль', 'error')
 
         return render_template('login.html')
@@ -170,10 +182,16 @@ def create_app(config: dict = None) -> Flask:
         db_path = app.config.get('user_db_path')
         import sqlite3
         conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
         try:
             cursor = conn.cursor()
+            # Check in role_permissions table
             cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
-            role_exists = cursor.fetchone() is not None
+            role_in_perms = cursor.fetchone() is not None
+            # Check in users table (role assigned to existing users)
+            cursor.execute('SELECT 1 FROM users WHERE role = ? LIMIT 1', (role,))
+            role_in_users = cursor.fetchone() is not None
+            role_exists = role_in_perms or role_in_users
         finally:
             conn.close()
         
@@ -263,14 +281,14 @@ def create_app(config: dict = None) -> Flask:
 
     @app.route('/station')
     @login_required
-    @require_permission('station_view')
+    @require_permission('production_view')
     def station():
         """Station detail page — pick a station and see its orders."""
         return render_template('station.html', user=current_user)
 
     @app.route('/map')
     @login_required
-    @require_permission('station_view')
+    @require_permission('map_view')
     def map_page():
         """SVG pipeline tracking page."""
         return render_template('map.html', user=current_user)
@@ -334,16 +352,22 @@ def create_app(config: dict = None) -> Flask:
     @require_role('admin')
     def api_set_role_permissions(role: str):
         """Set permissions for a specific role."""
-        # Validate role exists in database (either built-in or custom)
+        # Validate role exists in database (either in role_permissions table OR in users table as role)
         db_path = app.config.get('user_db_path')
         import sqlite3
         conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
         try:
             cursor = conn.cursor()
-            # Check if role exists in role_permissions table (any row, including empty marker)
-            # OR if it's a built-in role
+            # Check if role exists in role_permissions table OR is a built-in role
             cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
-            role_exists = cursor.fetchone() is not None
+            role_in_perms = cursor.fetchone() is not None
+            
+            # Also check if role is assigned to any user
+            cursor.execute('SELECT 1 FROM users WHERE role = ? LIMIT 1', (role,))
+            role_in_users = cursor.fetchone() is not None
+            
+            role_exists = role_in_perms or role_in_users
         finally:
             conn.close()
         
@@ -371,16 +395,18 @@ def create_app(config: dict = None) -> Flask:
             # Delete existing permissions for this role (including empty marker)
             cursor.execute('DELETE FROM role_permissions WHERE role = ?', (role,))
             
-            # Insert new permissions
-            for perm in permissions:
-                cursor.execute(
-                    'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
-                    (role, perm)
-                )
+            # Remove duplicates by using set
+            unique_permissions = list(set(permissions))
+            
+            # Insert new permissions using executemany
+            cursor.executemany(
+                'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
+                [(role, perm) for perm in unique_permissions]
+            )
             
             conn.commit()
             logger.info(f"Permissions for role '{role}' updated by '{current_user.username}'")
-            return jsonify({'success': True, 'permissions': permissions})
+            return jsonify({'success': True, 'permissions': unique_permissions})
         finally:
             conn.close()
 
@@ -466,24 +492,36 @@ def create_app(config: dict = None) -> Flask:
         if not role or not role.isidentifier():
             return jsonify({'error': 'Invalid role name. Use letters and underscores only'}), 400
         
+        # Get permissions to assign (default to viewer permissions if not specified)
+        permissions = data.get('permissions', ['order_view', 'station_view'])
+        
         db_path = app.config.get('user_db_path')
         import sqlite3
         conn = sqlite3.connect(db_path)
         try:
             cursor = conn.cursor()
             
-            # Check if role already exists
+            # Check if role already exists (in role_permissions or users table)
             cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
-            if cursor.fetchone():
+            role_in_perms = cursor.fetchone() is not None
+            cursor.execute('SELECT 1 FROM users WHERE role = ? LIMIT 1', (role,))
+            role_in_users = cursor.fetchone() is not None
+            
+            if role_in_perms or role_in_users:
                 return jsonify({'error': f'Role "{role}" already exists'}), 400
             
-            # Insert role with no permissions (just a marker row with empty permission)
-            # Using empty string as marker to indicate role exists but has no permissions
-            cursor.execute('INSERT INTO role_permissions (role, permission) VALUES (?, ?)', (role, ''))
+            # Remove duplicates
+            unique_permissions = list(set(permissions))
+            
+            # Insert role with permissions using executemany
+            cursor.executemany(
+                'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
+                [(role, perm) for perm in unique_permissions]
+            )
             
             conn.commit()
-            logger.info(f"New role '{role}' created by '{current_user.username}'")
-            return jsonify({'success': True, 'role': role, 'permissions': []})
+            logger.info(f"New role '{role}' created by '{current_user.username}' with {len(unique_permissions)} permission(s)")
+            return jsonify({'success': True, 'role': role, 'permissions': unique_permissions})
         except sqlite3.IntegrityError:
             return jsonify({'error': f'Role "{role}" already exists'}), 400
         finally:
@@ -500,12 +538,17 @@ def create_app(config: dict = None) -> Flask:
         db_path = app.config.get('user_db_path')
         import sqlite3
         conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
         try:
             cursor = conn.cursor()
             
-            # Check if role exists
+            # Check if role exists in role_permissions OR users table
             cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
-            if not cursor.fetchone():
+            role_in_perms = cursor.fetchone() is not None
+            cursor.execute('SELECT 1 FROM users WHERE role = ? LIMIT 1', (role,))
+            role_in_users = cursor.fetchone() is not None
+            
+            if not role_in_perms and not role_in_users:
                 return jsonify({'error': f'Role "{role}" not found'}), 404
             
             # Delete role permissions

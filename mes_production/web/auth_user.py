@@ -98,14 +98,6 @@ def require_permission(permission: str):
 
 
 # ── Flask-Login setup ─────────────────────────────────────────
-    if permission in PERMISSIONS:
-        # Permission exists in system, check database
-        permissions = get_user_permissions(user_id)
-        return permission in permissions
-    return False
-
-
-# ── Flask-Login setup ─────────────────────────────────────────
 
 login_manager = LoginManager()
 login_manager.login_view = 'login'
