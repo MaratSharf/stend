@@ -217,6 +217,28 @@ DEFAULT_ROLE_PERMISSIONS: Dict[str, List[str]] = {
 }
 
 
+def get_role_default_permissions(role: str) -> List[str]:
+    """Get default permissions for a role, ensuring consistency."""
+    defaults = DEFAULT_ROLE_PERMISSIONS.get(role, []).copy()
+    
+    # Ensure viewer can only view, not create/modify orders
+    if role == 'viewer':
+        # Remove any write permissions if accidentally added
+        write_perms = ['create_order', 'launch_order', 'move_order', 'complete_order', 
+                       'cancel_order', 'manage_users', 'manage_roles', 'manage_stations']
+        defaults = [p for p in defaults if p not in write_perms]
+    
+    # Ensure operator has all necessary order operation permissions
+    if role == 'operator':
+        required_order_perms = ['create_order', 'launch_order', 'move_order', 
+                                'complete_order', 'cancel_order']
+        for perm in required_order_perms:
+            if perm not in defaults:
+                defaults.append(perm)
+    
+    return defaults
+
+
 def get_permission_categories() -> List[str]:
     """Return list of permission category keys."""
     return list(CATEGORIES.keys())
