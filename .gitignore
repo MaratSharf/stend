@@ -1,1 +1,31 @@
-Nothing needs to be added to .gitignore since only a source file (base.html) was modified and there are no build artifacts, dependencies, or temporary files in the changes.
+```
+# Database files
+*.db
+data/*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.ENV
+.ENV.local
+
+# Logs
+*.log
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+```

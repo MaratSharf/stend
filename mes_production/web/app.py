@@ -595,9 +595,10 @@ def create_app(config: dict = None) -> Flask:
             return jsonify({'error': 'Invalid role name. Use letters, numbers and underscores only'}), 400
         
         # Get permissions to assign
-        # If no permissions specified, assign basic view permissions to ensure the role can access something
+        # ALWAYS assign default permissions if none specified or empty list
+        # This prevents creating roles with no access
         permissions = data.get('permissions')
-        if permissions is None or len(permissions) == 0:
+        if not permissions:  # None, empty list, or empty dict
             # Default: give basic view permissions so the role isn't locked out
             # Include production_view as primary permission for production-only roles
             permissions = [
@@ -606,6 +607,7 @@ def create_app(config: dict = None) -> Flask:
                 'station_view',     # Can view station tracking
                 'view_statistics',  # Can view statistics
             ]
+            logger.info(f"Role '{role}' created with default permissions (none provided)")
         
         # Validate all permissions exist
         from utils.permissions import PERMISSIONS
