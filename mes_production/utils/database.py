@@ -208,10 +208,10 @@ class Database:
             if not order or order['status'] != 'production':
                 return {'success': False, 'message': 'Order not in production'}
 
-            # Verify the order is at the parent station
+            # Verify the order is at the parent station OR on the sub-station itself
             parent = float(int(sub_station_id))
-            if order['current_station'] != parent:
-                return {'success': False, 'message': 'Order is not at the parent station'}
+            if order['current_station'] != parent and order['current_station'] != sub_station_id:
+                return {'success': False, 'message': 'Order is not at the parent station or sub-station'}
 
             # Get current completed_subs
             completed = set()
