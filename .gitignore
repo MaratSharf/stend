@@ -5,13 +5,4 @@ __pycache__/
 
 # Logs
 *.log
-mes_production/data/logs/
-
-# Database files
-*.db
-
-# Environment files
-.env
-.env.local
-*.env.*
 ```
