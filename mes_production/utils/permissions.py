@@ -214,6 +214,25 @@ DEFAULT_ROLE_PERMISSIONS: Dict[str, List[str]] = {
         'view_statistics',
     ],
     'admin': list(PERMISSIONS.keys()),  # All permissions
+    'oper': [  # Alternative operator account - same as operator
+        'order_view',
+        'production_view',
+        'map_view',
+        'station_view',
+        'create_order',
+        'launch_order',
+        'move_order',
+        'complete_order',
+        'cancel_order',
+        'view_statistics',
+    ],
+    'viewer_only': [  # Read-only role - can view all screens but not modify orders
+        'order_view',
+        'production_view',
+        'map_view',
+        'station_view',
+        'view_statistics',
+    ],
 }
 
 
