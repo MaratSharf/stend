@@ -9,32 +9,9 @@ mes_production/data/logs/
 
 # Database files
 *.db
-mes_production/data/users.db
 
 # Environment files
 .env
 .env.local
 *.env.*
-
-# Dependencies
-.venv/
-venv/
-node_modules/
-
-# Editors
-.vscode/
-.idea/
-
-# System files
-.DS_Store
-Thumbs.db
-
-# Coverage
-.coverage
-coverage/
-htmlcov/
-
-# Cache directories
-.mypy_cache/
-.pytest_cache/
 ```
