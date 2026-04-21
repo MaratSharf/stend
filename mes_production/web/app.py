@@ -122,16 +122,18 @@ def create_app(config: dict = None) -> Flask:
                         if next_page.startswith(url) and required_perm in perms:
                             return redirect(next_page)
                     
-                    # If no permission for requested page, find alternative
-                    # Priority: production -> map -> tracking -> orders (if accessible)
-                    if 'production_view' in perms:
+                    # If no permission for requested page, find alternative based on actual permissions
+                    # Priority: orders -> production -> map -> tracking -> statistics
+                    if 'order_view' in perms:
+                        return redirect(url_for('index'))
+                    elif 'production_view' in perms:
                         return redirect(url_for('station'))
                     elif 'map_view' in perms:
                         return redirect(url_for('map'))
                     elif 'station_view' in perms:
                         return redirect(url_for('tracking'))
-                    elif 'order_view' in perms:
-                        return redirect(url_for('index'))
+                    elif 'view_statistics' in perms:
+                        return redirect(url_for('statistics_page') if app.view_functions.get('statistics_page') else url_for('station'))
                     elif 'user_view' in perms:
                         return redirect(url_for('users_page'))
                     elif 'role_view' in perms:
@@ -145,20 +147,27 @@ def create_app(config: dict = None) -> Flask:
                 from web.auth_user import get_user_permissions
                 perms = get_user_permissions(user.id)
                 
-                # Priority order for redirect
-                if user.has_role('admin'):
+                # Priority order for redirect based on actual permissions (not just role name)
+                # The order determines which page users see first after login
+                if 'order_view' in perms:
+                    # User can view orders - go to main page (orders list)
                     return redirect(url_for('index'))
-                elif user.has_role('operator'):
-                    return redirect(url_for('station'))
-                elif 'production_view' in perms and 'order_view' not in perms:
-                    # Production-only role (like 'w')
-                    return redirect(url_for('station'))
-                elif 'map_view' in perms and 'order_view' not in perms:
+                elif 'map_view' in perms and 'production_view' in perms and 'order_view' not in perms:
+                    # Production-only role with map access - prefer map view (like role 'w')
+                    # This ensures users who should only see the map go there first
                     return redirect(url_for('map'))
-                elif 'station_view' in perms and 'order_view' not in perms:
+                elif 'production_view' in perms:
+                    # User can only view production status
+                    return redirect(url_for('station'))
+                elif 'map_view' in perms:
+                    # User can only view station map
+                    return redirect(url_for('map'))
+                elif 'station_view' in perms:
+                    # User can only view station tracking
                     return redirect(url_for('tracking'))
-                elif 'order_view' in perms:
-                    return redirect(url_for('index'))
+                elif 'view_statistics' in perms:
+                    # User can only view statistics
+                    return redirect(url_for('statistics_page') if app.view_functions.get('statistics_page') else url_for('station'))
                 elif 'user_view' in perms:
                     return redirect(url_for('users_page'))
                 elif 'role_view' in perms:
@@ -590,8 +599,9 @@ def create_app(config: dict = None) -> Flask:
         permissions = data.get('permissions')
         if permissions is None or len(permissions) == 0:
             # Default: give basic view permissions so the role isn't locked out
+            # Include production_view as primary permission for production-only roles
             permissions = [
-                'production_view',  # Can view production status
+                'production_view',  # Can view production status (primary for production-only roles)
                 'map_view',         # Can view station map
                 'station_view',     # Can view station tracking
                 'view_statistics',  # Can view statistics
@@ -632,6 +642,55 @@ def create_app(config: dict = None) -> Flask:
             return jsonify({'success': True, 'role': role, 'permissions': unique_permissions})
         except sqlite3.IntegrityError:
             return jsonify({'error': f'Role "{role}" already exists'}), 400
+        finally:
+            conn.close()
+
+    @app.route('/api/roles/<role>', methods=['PUT'])
+    @login_required
+    @require_permission('manage_roles')
+    def api_update_role(role: str):
+        """Update role name or permissions."""
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        db_path = app.config.get('user_db_path')
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            
+            # Check if role exists
+            cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
+            if not cursor.fetchone():
+                return jsonify({'error': f'Role "{role}" does not exist'}), 404
+            
+            # Update permissions if provided
+            if 'permissions' in data:
+                permissions = data['permissions']
+                if not isinstance(permissions, list):
+                    return jsonify({'error': 'permissions must be an array'}), 400
+                
+                # Validate all permissions exist
+                from utils.permissions import PERMISSIONS
+                invalid = [p for p in permissions if p not in PERMISSIONS]
+                if invalid:
+                    return jsonify({'error': f'Invalid permissions: {", ".join(invalid)}'}), 400
+                
+                # Delete existing permissions
+                cursor.execute('DELETE FROM role_permissions WHERE role = ?', (role,))
+                
+                # Insert new permissions
+                unique_permissions = list(set(permissions))
+                cursor.executemany(
+                    'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
+                    [(role, perm) for perm in unique_permissions]
+                )
+                
+                logger.info(f"Role '{role}' permissions updated by '{current_user.username}': {', '.join(unique_permissions)}")
+            
+            conn.commit()
+            return jsonify({'success': True, 'role': role})
         finally:
             conn.close()
 
