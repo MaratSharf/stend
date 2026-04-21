@@ -11,7 +11,7 @@ from web.auth import AuthService
 from web.auth_user import (
     login_manager, authenticate, require_role, init_default_users,
     require_auth_or_api_key, require_operator_or_api_key, generate_csrf_token,
-    require_permission, get_user_permissions
+    require_permission, get_user_permissions, user_has_permission
 )
 from utils.permissions import get_all_permissions, get_permission_categories, get_permissions_by_category, CATEGORIES, DEFAULT_ROLE_PERMISSIONS
 from web.models import User, ROLES, ROLE_LABELS
@@ -102,9 +102,11 @@ def create_app(config: dict = None) -> Flask:
                 next_page = request.args.get('next')
                 if next_page:
                     return redirect(next_page)
-                # Redirect users with production_view permission to station page
+                # Redirect users with station_view permission to station page
                 # Use user_has_permission after login_user so current_user is set
-                if user.has_role('admin') or user_has_permission(user.id, 'production_view'):
+                if user.has_role('admin'):
+                    return redirect(url_for('index'))
+                elif user_has_permission(user.id, 'station_view'):
                     return redirect(url_for('station'))
                 return redirect(url_for('index'))
             flash('Неверный логин или пароль', 'error')
