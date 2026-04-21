@@ -58,6 +58,9 @@
             html += '</tr></thead><tbody>';
 
             orders.forEach(function (o) {
+                var currentStation = o.current_station;
+                var isSubStation = (currentStation !== Math.floor(currentStation));
+                
                 html += '<tr>';
                 html += '<td>' + MESUtils.escapeHtml(o.order_number) + '</td>';
                 html += '<td>' + MESUtils.escapeHtml(o.batch) + '</td>';
@@ -65,7 +68,11 @@
                 html += '<td>' + MESUtils.escapeHtml(o.color) + '</td>';
                 html += '<td>' + MESUtils.formatDate(o.started_at) + '</td>';
                 html += '<td class="action-buttons">';
-                html += '  <button class="btn btn-sm btn-success" onclick="MESStation.moveOrder(' + o.id + ')">Переместить →</button>';
+                if (isSubStation) {
+                    html += '  <button class="btn btn-sm btn-success" onclick="MESStation.completeSubOrder(' + o.id + ', ' + currentStation + ')">Завершить подстанцию ✓</button>';
+                } else {
+                    html += '  <button class="btn btn-sm btn-success" onclick="MESStation.moveOrder(' + o.id + ')">Переместить →</button>';
+                }
                 html += '  <button class="btn btn-sm btn-danger"   onclick="MESStation.cancelOrder(' + o.id + ')">Отмена</button>';
                 html += '</td>';
                 html += '</tr>';
@@ -123,6 +130,26 @@
         .then(function (res) {
             if (res.ok) {
                 MESUtils.showToast('Заказ отменён', 'success');
+            } else {
+                MESUtils.showToast(res.data.message || res.data.error || 'Ошибка', 'error');
+            }
+            reloadCurrentStation();
+        })
+        .catch(function () { MESUtils.showToast('Ошибка соединения', 'error'); });
+    };
+
+    window.MESStation.completeSubOrder = function (orderId, subStationId) {
+        var ok = confirm('Завершить подстанцию ' + subStationId + '?');
+        if (!ok) return;
+        fetch('/api/orders/' + orderId + '/complete-sub', {
+            method: 'POST',
+            headers: MESUtils.authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ sub_station_id: subStationId })
+        })
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+        .then(function (res) {
+            if (res.ok && res.data.success) {
+                MESUtils.showToast('Подстанция завершена', 'success');
             } else {
                 MESUtils.showToast(res.data.message || res.data.error || 'Ошибка', 'error');
             }
