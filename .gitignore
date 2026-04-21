@@ -1,34 +1,40 @@
 ```
-# Python
-__pycache__/
+# Compiled Python files
 *.pyc
-*.pyo
-*.pyd
-
-# Database
-mes_production/data/*.db
+__pycache__/
 
 # Logs
 *.log
+mes_production/data/logs/
 
-# Environment
+# Database files
+*.db
+mes_production/data/users.db
+
+# Environment files
 .env
 .env.local
 *.env.*
-
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
 
 # Dependencies
 .venv/
 venv/
 node_modules/
 
-# Build artifacts
-dist/
-build/
-target/
+# Editors
+.vscode/
+.idea/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Cache directories
+.mypy_cache/
+.pytest_cache/
 ```

@@ -102,14 +102,23 @@ def create_app(config: dict = None) -> Flask:
                 next_page = request.args.get('next')
                 if next_page:
                     return redirect(next_page)
-                # Redirect based on user's role/permissions
+                # Redirect based on user's permissions
                 # Admin goes to main dashboard
                 if user.has_role('admin'):
                     return redirect(url_for('index'))
                 # Operator goes to station/production view
                 elif user.has_role('operator'):
                     return redirect(url_for('station'))
-                # Viewer goes to main orders view
+                # For custom roles, check what permissions they have
+                from web.auth_user import get_user_permissions
+                perms = get_user_permissions(user.id)
+                # If user has production_view but NOT order_view, redirect to production/station
+                if 'production_view' in perms and 'order_view' not in perms:
+                    return redirect(url_for('station'))
+                # If user has map_view but NOT order_view, redirect to map
+                elif 'map_view' in perms and 'order_view' not in perms:
+                    return redirect(url_for('map'))
+                # Default: go to orders page (will show Forbidden if no permission)
                 else:
                     return redirect(url_for('index'))
             flash('Неверный логин или пароль', 'error')
