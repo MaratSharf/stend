@@ -99,28 +99,75 @@ def create_app(config: dict = None) -> Flask:
                 # Fix #3: Force password change on first login
                 if user.needs_password_change:
                     return redirect(url_for('change_password'))
+                
+                # Smart redirect: find the first accessible page based on user's permissions
                 next_page = request.args.get('next')
                 if next_page:
-                    return redirect(next_page)
-                # Redirect based on user's permissions
-                # Admin goes to main dashboard
-                if user.has_role('admin'):
-                    return redirect(url_for('index'))
-                # Operator goes to station/production view
-                elif user.has_role('operator'):
-                    return redirect(url_for('station'))
-                # For custom roles, check what permissions they have
+                    # Verify user has permission for the requested page
+                    from web.auth_user import get_user_permissions
+                    perms = get_user_permissions(user.id)
+                    
+                    # Map URLs to required permissions
+                    url_to_perm = {
+                        '/': 'order_view',
+                        '/tracking': 'station_view',
+                        '/station': 'production_view',
+                        '/map': 'map_view',
+                        '/users': 'user_view',
+                        '/roles': 'role_view',
+                    }
+                    
+                    # Check if user has permission for requested page
+                    for url, required_perm in url_to_perm.items():
+                        if next_page.startswith(url) and required_perm in perms:
+                            return redirect(next_page)
+                    
+                    # If no permission for requested page, find alternative
+                    # Priority: production -> map -> tracking -> orders (if accessible)
+                    if 'production_view' in perms:
+                        return redirect(url_for('station'))
+                    elif 'map_view' in perms:
+                        return redirect(url_for('map'))
+                    elif 'station_view' in perms:
+                        return redirect(url_for('tracking'))
+                    elif 'order_view' in perms:
+                        return redirect(url_for('index'))
+                    elif 'user_view' in perms:
+                        return redirect(url_for('users_page'))
+                    elif 'role_view' in perms:
+                        return redirect(url_for('roles_page'))
+                    else:
+                        # No view permissions - show error
+                        flash('У вашей роли нет доступа ни к одному разделу системы', 'error')
+                        return redirect(url_for('login'))
+                
+                # No next parameter - smart redirect based on permissions
                 from web.auth_user import get_user_permissions
                 perms = get_user_permissions(user.id)
-                # If user has production_view but NOT order_view, redirect to production/station
-                if 'production_view' in perms and 'order_view' not in perms:
+                
+                # Priority order for redirect
+                if user.has_role('admin'):
+                    return redirect(url_for('index'))
+                elif user.has_role('operator'):
                     return redirect(url_for('station'))
-                # If user has map_view but NOT order_view, redirect to map
+                elif 'production_view' in perms and 'order_view' not in perms:
+                    # Production-only role (like 'w')
+                    return redirect(url_for('station'))
                 elif 'map_view' in perms and 'order_view' not in perms:
                     return redirect(url_for('map'))
-                # Default: go to orders page (will show Forbidden if no permission)
-                else:
+                elif 'station_view' in perms and 'order_view' not in perms:
+                    return redirect(url_for('tracking'))
+                elif 'order_view' in perms:
                     return redirect(url_for('index'))
+                elif 'user_view' in perms:
+                    return redirect(url_for('users_page'))
+                elif 'role_view' in perms:
+                    return redirect(url_for('roles_page'))
+                else:
+                    # No permissions at all
+                    flash('У вашей роли нет доступа ни к одному разделу системы', 'error')
+                    return redirect(url_for('login'))
+                    
             flash('Неверный логин или пароль', 'error')
 
         return render_template('login.html')
@@ -186,13 +233,14 @@ def create_app(config: dict = None) -> Flask:
     @login_required
     @require_permission('manage_users')
     def api_create_user():
+        """Create a new user with automatic role initialization if needed."""
         data = request.get_json()
         if not data or not data.get('username') or not data.get('password'):
             return jsonify({'error': 'username and password required'}), 400
 
         role = data.get('role', 'viewer')
         
-        # Validate role exists in database (built-in or custom)
+        # Get all valid roles from database and ROLES dict
         db_path = app.config.get('user_db_path')
         import sqlite3
         conn = sqlite3.connect(db_path)
@@ -206,11 +254,16 @@ def create_app(config: dict = None) -> Flask:
             cursor.execute('SELECT 1 FROM users WHERE role = ? LIMIT 1', (role,))
             role_in_users = cursor.fetchone() is not None
             role_exists = role_in_perms or role_in_users
+            
+            # If role doesn't exist and it's not a built-in role, offer to create it with defaults
+            if not role_exists and role not in ROLES:
+                conn.close()
+                return jsonify({
+                    'error': f'Role "{role}" does not exist',
+                    'suggestion': 'You can create this role first via the Roles management page'
+                }), 400
         finally:
             conn.close()
-        
-        if not role_exists and role not in ROLES:
-            return jsonify({'error': f'Invalid role. Role "{role}" does not exist'}), 400
 
         db_path = app.config.get('user_db_path')
         import sqlite3
@@ -224,8 +277,8 @@ def create_app(config: dict = None) -> Flask:
                 VALUES (?, ?, ?, ?)
             ''', (data['username'].strip(), password_hash, role, datetime.now().isoformat()))
             conn.commit()
-            logger.info(f"User '{data['username']}' created by '{current_user.username}'")
-            return jsonify({'success': True, 'id': cursor.lastrowid})
+            logger.info(f"User '{data['username']}' created with role '{role}' by '{current_user.username}'")
+            return jsonify({'success': True, 'id': cursor.lastrowid, 'role': role})
         except sqlite3.IntegrityError:
             return jsonify({'error': 'Username already exists'}), 400
         finally:
@@ -235,6 +288,7 @@ def create_app(config: dict = None) -> Flask:
     @login_required
     @require_permission('manage_users')
     def api_update_user(user_id: int):
+        """Update user with role validation."""
         data = request.get_json()
         db_path = app.config.get('user_db_path')
         import sqlite3
@@ -247,9 +301,13 @@ def create_app(config: dict = None) -> Flask:
             db_roles = {r[0] for r in cursor.fetchall()}
             valid_roles = db_roles.union(set(ROLES.keys()))
             
-            # Fix #5: Whitelisted column updates (no f-string SQL)
-            if 'role' in data and data['role'] in valid_roles:
-                cursor.execute('UPDATE users SET role = ? WHERE id = ?', (data['role'], user_id))
+            # Handle role update with validation
+            if 'role' in data:
+                new_role = data['role']
+                if new_role not in valid_roles:
+                    return jsonify({'error': f'Invalid role "{new_role}". Available roles: {", ".join(sorted(valid_roles))}'}), 400
+                cursor.execute('UPDATE users SET role = ? WHERE id = ?', (new_role, user_id))
+                
             if 'password' in data and data['password']:
                 cursor.execute('UPDATE users SET password_hash = ? WHERE id = ?',
                                (generate_password_hash(data['password']), user_id))
@@ -370,8 +428,7 @@ def create_app(config: dict = None) -> Flask:
     @login_required
     @require_permission('manage_roles')
     def api_set_role_permissions(role: str):
-        """Set permissions for a specific role."""
-        # Validate role exists in database (either in role_permissions table OR in users table as role)
+        """Set permissions for a specific role with automatic role creation if needed."""
         db_path = app.config.get('user_db_path')
         import sqlite3
         conn = sqlite3.connect(db_path)
@@ -390,9 +447,6 @@ def create_app(config: dict = None) -> Flask:
         finally:
             conn.close()
         
-        if not role_exists and role not in ROLES:
-            return jsonify({'error': f'Invalid role. Role "{role}" does not exist'}), 400
-        
         data = request.get_json()
         if not data or 'permissions' not in data:
             return jsonify({'error': 'permissions array required'}), 400
@@ -406,6 +460,26 @@ def create_app(config: dict = None) -> Flask:
         invalid = [p for p in permissions if p not in PERMISSIONS]
         if invalid:
             return jsonify({'error': f'Invalid permissions: {", ".join(invalid)}'}), 400
+        
+        # If role doesn't exist but is being used by a user, create it automatically
+        if not role_exists and role not in ROLES:
+            # Create the role with the provided permissions
+            conn = sqlite3.connect(db_path)
+            try:
+                cursor = conn.cursor()
+                unique_permissions = list(set(permissions))
+                cursor.executemany(
+                    'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
+                    [(role, perm) for perm in unique_permissions]
+                )
+                conn.commit()
+                logger.info(f"Auto-created role '{role}' with permissions: {', '.join(unique_permissions)}")
+                return jsonify({'success': True, 'permissions': unique_permissions, 'created': True})
+            finally:
+                conn.close()
+        
+        if not role_exists and role not in ROLES:
+            return jsonify({'error': f'Invalid role. Role "{role}" does not exist'}), 400
         
         conn = sqlite3.connect(db_path)
         try:
@@ -508,11 +582,26 @@ def create_app(config: dict = None) -> Flask:
             return jsonify({'error': 'role name required'}), 400
         
         role = data['role'].strip().lower()
-        if not role or not role.isidentifier():
-            return jsonify({'error': 'Invalid role name. Use letters and underscores only'}), 400
+        if not role or not role.replace('_', '').isalnum():
+            return jsonify({'error': 'Invalid role name. Use letters, numbers and underscores only'}), 400
         
-        # Get permissions to assign (default to viewer permissions if not specified)
-        permissions = data.get('permissions', ['order_view', 'station_view'])
+        # Get permissions to assign
+        # If no permissions specified, assign basic view permissions to ensure the role can access something
+        permissions = data.get('permissions')
+        if permissions is None or len(permissions) == 0:
+            # Default: give basic view permissions so the role isn't locked out
+            permissions = [
+                'production_view',  # Can view production status
+                'map_view',         # Can view station map
+                'station_view',     # Can view station tracking
+                'view_statistics',  # Can view statistics
+            ]
+        
+        # Validate all permissions exist
+        from utils.permissions import PERMISSIONS
+        invalid = [p for p in permissions if p not in PERMISSIONS]
+        if invalid:
+            return jsonify({'error': f'Invalid permissions: {", ".join(invalid)}'}), 400
         
         db_path = app.config.get('user_db_path')
         import sqlite3
@@ -539,7 +628,7 @@ def create_app(config: dict = None) -> Flask:
             )
             
             conn.commit()
-            logger.info(f"New role '{role}' created by '{current_user.username}' with {len(unique_permissions)} permission(s)")
+            logger.info(f"New role '{role}' created by '{current_user.username}' with {len(unique_permissions)} permission(s): {', '.join(unique_permissions)}")
             return jsonify({'success': True, 'role': role, 'permissions': unique_permissions})
         except sqlite3.IntegrityError:
             return jsonify({'error': f'Role "{role}" already exists'}), 400
