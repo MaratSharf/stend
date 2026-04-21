@@ -129,7 +129,7 @@ def create_app(config: dict = None) -> Flask:
                     elif 'production_view' in perms:
                         return redirect(url_for('station'))
                     elif 'map_view' in perms:
-                        return redirect(url_for('map'))
+                        return redirect(url_for('map_page'))
                     elif 'station_view' in perms:
                         return redirect(url_for('tracking'))
                     elif 'view_statistics' in perms:
@@ -155,13 +155,13 @@ def create_app(config: dict = None) -> Flask:
                 elif 'map_view' in perms and 'production_view' in perms and 'order_view' not in perms:
                     # Production-only role with map access - prefer map view (like role 'w')
                     # This ensures users who should only see the map go there first
-                    return redirect(url_for('map'))
+                    return redirect(url_for('map_page'))
                 elif 'production_view' in perms:
                     # User can only view production status
                     return redirect(url_for('station'))
                 elif 'map_view' in perms:
                     # User can only view station map
-                    return redirect(url_for('map'))
+                    return redirect(url_for('map_page'))
                 elif 'station_view' in perms:
                     # User can only view station tracking
                     return redirect(url_for('tracking'))
