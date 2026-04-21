@@ -102,11 +102,15 @@ def create_app(config: dict = None) -> Flask:
                 next_page = request.args.get('next')
                 if next_page:
                     return redirect(next_page)
-                # Redirect users with production_view permission to station page
+                # Redirect users with station_view permission to station page
                 # Use user_has_permission after login_user so current_user is set
                 if user.has_role('admin'):
                     return redirect(url_for('index'))
+<<<<<<< HEAD
                 elif user_has_permission(user.id, 'production_view'):
+=======
+                elif user_has_permission(user.id, 'station_view'):
+>>>>>>> 40387d8cbe67ad332f351be53fb5e32998fce723
                     return redirect(url_for('station'))
                 return redirect(url_for('index'))
             flash('Неверный логин или пароль', 'error')
