@@ -102,13 +102,16 @@ def create_app(config: dict = None) -> Flask:
                 next_page = request.args.get('next')
                 if next_page:
                     return redirect(next_page)
-                # Redirect users with station_view permission to station page
-                # Use user_has_permission after login_user so current_user is set
+                # Redirect based on user's role/permissions
+                # Admin goes to main dashboard
                 if user.has_role('admin'):
                     return redirect(url_for('index'))
-                elif user_has_permission(user.id, 'production_view'):
+                # Operator goes to station/production view
+                elif user.has_role('operator'):
                     return redirect(url_for('station'))
-                return redirect(url_for('index'))
+                # Viewer goes to main orders view
+                else:
+                    return redirect(url_for('index'))
             flash('Неверный логин или пароль', 'error')
 
         return render_template('login.html')
@@ -154,9 +157,9 @@ def create_app(config: dict = None) -> Flask:
 
     @app.route('/users')
     @login_required
-    @require_role('admin')
+    @require_permission('user_view')
     def users_page():
-        """Admin page: list/create/edit users."""
+        """User management page: list/create/edit users (requires manage_users permission for write operations)."""
         db_path = app.config.get('user_db_path')
         import sqlite3
         conn = sqlite3.connect(db_path)
@@ -172,7 +175,7 @@ def create_app(config: dict = None) -> Flask:
 
     @app.route('/api/users', methods=['POST'])
     @login_required
-    @require_role('admin')
+    @require_permission('manage_users')
     def api_create_user():
         data = request.get_json()
         if not data or not data.get('username') or not data.get('password'):
@@ -221,7 +224,7 @@ def create_app(config: dict = None) -> Flask:
 
     @app.route('/api/users/<int:user_id>', methods=['POST'])
     @login_required
-    @require_role('admin')
+    @require_permission('manage_users')
     def api_update_user(user_id: int):
         data = request.get_json()
         db_path = app.config.get('user_db_path')
@@ -230,8 +233,13 @@ def create_app(config: dict = None) -> Flask:
         try:
             cursor = conn.cursor()
 
+            # Get all valid roles from database and ROLES dict
+            cursor.execute('SELECT DISTINCT role FROM role_permissions')
+            db_roles = {r[0] for r in cursor.fetchall()}
+            valid_roles = db_roles.union(set(ROLES.keys()))
+            
             # Fix #5: Whitelisted column updates (no f-string SQL)
-            if 'role' in data and data['role'] in ROLES:
+            if 'role' in data and data['role'] in valid_roles:
                 cursor.execute('UPDATE users SET role = ? WHERE id = ?', (data['role'], user_id))
             if 'password' in data and data['password']:
                 cursor.execute('UPDATE users SET password_hash = ? WHERE id = ?',
@@ -248,7 +256,7 @@ def create_app(config: dict = None) -> Flask:
 
     @app.route('/api/users/<int:user_id>', methods=['DELETE'])
     @login_required
-    @require_role('admin')
+    @require_permission('manage_users')
     def api_delete_user(user_id: int):
         if user_id == current_user.id:
             return jsonify({'error': 'Cannot delete yourself'}), 400
@@ -351,7 +359,7 @@ def create_app(config: dict = None) -> Flask:
 
     @app.route('/api/roles/<role>/permissions', methods=['POST'])
     @login_required
-    @require_role('admin')
+    @require_permission('manage_roles')
     def api_set_role_permissions(role: str):
         """Set permissions for a specific role."""
         # Validate role exists in database (either in role_permissions table OR in users table as role)
@@ -414,7 +422,7 @@ def create_app(config: dict = None) -> Flask:
 
     @app.route('/api/roles/<role>/permissions/reset', methods=['POST'])
     @login_required
-    @require_role('admin')
+    @require_permission('manage_roles')
     def api_reset_role_permissions(role: str):
         """Reset permissions for a role to defaults."""
         if role not in ROLES:
@@ -483,7 +491,7 @@ def create_app(config: dict = None) -> Flask:
 
     @app.route('/api/roles', methods=['POST'])
     @login_required
-    @require_role('admin')
+    @require_permission('manage_roles')
     def api_create_role():
         """Create a new role with default permissions."""
         data = request.get_json()
@@ -531,7 +539,7 @@ def create_app(config: dict = None) -> Flask:
 
     @app.route('/api/roles/<role>', methods=['DELETE'])
     @login_required
-    @require_role('admin')
+    @require_permission('manage_roles')
     def api_delete_role(role: str):
         """Delete a role."""
         if role in ('admin', 'operator', 'viewer'):
