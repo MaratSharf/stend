@@ -233,12 +233,23 @@ DEFAULT_ROLE_PERMISSIONS: Dict[str, List[str]] = {
         'station_view',
         'view_statistics',
     ],
+    # Default permissions for any new custom role - ensures basic access
+    'default': [
+        'production_view',
+        'map_view',
+        'station_view',
+        'view_statistics',
+    ],
 }
 
 
 def get_role_default_permissions(role: str) -> List[str]:
     """Get default permissions for a role, ensuring consistency."""
     defaults = DEFAULT_ROLE_PERMISSIONS.get(role, []).copy()
+    
+    # If role is not in the predefined list, use 'default' permissions
+    if not defaults and role != 'admin':
+        defaults = DEFAULT_ROLE_PERMISSIONS.get('default', []).copy()
     
     # Ensure viewer can only view, not create/modify orders
     if role == 'viewer':
@@ -279,4 +290,8 @@ def get_all_permissions() -> List[Dict[str, str]]:
 
 def get_default_permissions_for_role(role: str) -> List[str]:
     """Return default permission keys for a role."""
-    return DEFAULT_ROLE_PERMISSIONS.get(role, []).copy()
+    defaults = DEFAULT_ROLE_PERMISSIONS.get(role, []).copy()
+    # If role is not in the predefined list, use 'default' permissions
+    if not defaults and role != 'admin':
+        defaults = DEFAULT_ROLE_PERMISSIONS.get('default', []).copy()
+    return defaults

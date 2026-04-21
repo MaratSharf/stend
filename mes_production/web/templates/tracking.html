@@ -13,12 +13,23 @@
             <h1>🏭 MES Production System</h1>
             <div class="header-actions">
                 <nav>
+                    {% if user.has_permission('order_view') %}
                     <a href="/">Заказы</a>
-                    <a href="/tracking" class="active">Карта станций</a>
-                    <a href="/station">Станция</a>
-                    <a href="/map">Производство</a>
-                    {% if user and user.role == 'admin' %}
+                    {% endif %}
+                    {% if user.has_permission('production_view') %}
+                    <a href="/station">Производство</a>
+                    {% endif %}
+                    {% if user.has_permission('map_view') %}
+                    <a href="/map">Карта станций</a>
+                    {% endif %}
+                    {% if user.has_permission('station_view') %}
+                    <a href="/tracking" class="active">Трекинг</a>
+                    {% endif %}
+                    {% if user.has_permission('user_view') %}
                     <a href="/users">Пользователи</a>
+                    {% endif %}
+                    {% if user.has_permission('role_view') %}
+                    <a href="/roles">Роли</a>
                     {% endif %}
                 </nav>
                 <div style="display:flex;align-items:center;gap:10px;">

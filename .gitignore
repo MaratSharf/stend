@@ -1,31 +1,36 @@
 ```
-# Database files
-*.db
-data/*.db
-
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-env/
-venv/
-.venv/
-.ENV
-.ENV.local
+
+# Database
+*.db
 
 # Logs
 *.log
 
-# IDE and editor files
+# Environment
+.env
+.env.local
+*.env.*
+
+# Dependencies
+.venv/
+venv/
+node_modules/
+
+# Build artifacts
+dist/
+build/
+target/
+
+# Editors
 .vscode/
 .idea/
-*.swp
-*.swo
-*.tmp
 
-# OS generated files
+# System
 .DS_Store
 Thumbs.db
 ```

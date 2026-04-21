@@ -517,11 +517,10 @@ def create_app(config: dict = None) -> Flask:
     @require_permission('manage_roles')
     def api_reset_role_permissions(role: str):
         """Reset permissions for a role to defaults."""
-        if role not in ROLES:
-            return jsonify({'error': f'Invalid role. Choose: {", ".join(ROLES.keys())}'}), 400
+        from utils.permissions import get_role_default_permissions
         
-        from utils.permissions import DEFAULT_ROLE_PERMISSIONS
-        default_perms = DEFAULT_ROLE_PERMISSIONS.get(role, [])
+        # Get default permissions (uses 'default' fallback for custom roles)
+        default_perms = get_role_default_permissions(role)
         
         db_path = app.config.get('user_db_path')
         import sqlite3
@@ -594,20 +593,16 @@ def create_app(config: dict = None) -> Flask:
         if not role or not role.replace('_', '').isalnum():
             return jsonify({'error': 'Invalid role name. Use letters, numbers and underscores only'}), 400
         
-        # Get permissions to assign
+        # Get permissions to assign - use helper function for consistency
+        from utils.permissions import get_role_default_permissions
+        permissions = data.get('permissions')
+        
         # ALWAYS assign default permissions if none specified or empty list
         # This prevents creating roles with no access
-        permissions = data.get('permissions')
         if not permissions:  # None, empty list, or empty dict
-            # Default: give basic view permissions so the role isn't locked out
-            # Include production_view as primary permission for production-only roles
-            permissions = [
-                'production_view',  # Can view production status (primary for production-only roles)
-                'map_view',         # Can view station map
-                'station_view',     # Can view station tracking
-                'view_statistics',  # Can view statistics
-            ]
-            logger.info(f"Role '{role}' created with default permissions (none provided)")
+            # Use the centralized default permissions logic
+            permissions = get_role_default_permissions(role)
+            logger.info(f"Role '{role}' created with default permissions: {permissions}")
         
         # Validate all permissions exist
         from utils.permissions import PERMISSIONS
