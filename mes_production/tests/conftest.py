@@ -19,6 +19,7 @@ if PROJECT_ROOT not in sys.path:
 from utils.database import Database
 from core.controller import Controller
 from web.app import create_app
+from utils.db_connection import DBConnection
 
 
 TEST_API_KEY = "test-secret-key-12345"
@@ -42,35 +43,63 @@ def user_db_path(tmp_path):
     return str(tmp_path / "test_users.db")
 
 
-def _init_test_users(db_path: str):
+def _init_test_users(config):
     """Create test users in the user DB. All have password_changed=1."""
-    conn = sqlite3.connect(db_path)
+    db = DBConnection(config)
+    conn = db.get_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'viewer',
-                is_active INTEGER NOT NULL DEFAULT 1,
-                password_changed INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL
-            )
-        ''')
+        cursor = db.cursor(conn)
+        if db.engine == 'postgresql':
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'viewer',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    password_changed INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                )
+            ''')
+        else:
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'viewer',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    password_changed INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                )
+            ''')
         now = datetime.now().isoformat()
+        ph = db.placeholder()
         # Admin user (password_changed=1 so no redirect in tests)
         admin_hash = generate_password_hash('admin')
-        cursor.execute('''
-            INSERT INTO users (username, password_hash, role, password_changed, created_at)
-            VALUES (?, ?, 'admin', 1, ?)
-        ''', ('admin', admin_hash, now))
-        # Viewer user
-        viewer_hash = generate_password_hash('viewer')
-        cursor.execute('''
-            INSERT INTO users (username, password_hash, role, password_changed, created_at)
-            VALUES (?, ?, 'viewer', 1, ?)
-        ''', ('viewer', viewer_hash, now))
+        if db.engine == 'postgresql':
+            cursor.execute(f'''
+                INSERT INTO users (username, password_hash, role, password_changed, created_at)
+                VALUES ({ph}, {ph}, 'admin', 1, {ph})
+                ON CONFLICT (username) DO NOTHING
+            ''', ('admin', admin_hash, now))
+            # Viewer user
+            viewer_hash = generate_password_hash('viewer')
+            cursor.execute(f'''
+                INSERT INTO users (username, password_hash, role, password_changed, created_at)
+                VALUES ({ph}, {ph}, 'viewer', 1, {ph})
+                ON CONFLICT (username) DO NOTHING
+            ''', ('viewer', viewer_hash, now))
+        else:
+            cursor.execute('''
+                INSERT OR IGNORE INTO users (username, password_hash, role, password_changed, created_at)
+                VALUES (?, ?, 'admin', 1, ?)
+            ''', ('admin', admin_hash, now))
+            viewer_hash = generate_password_hash('viewer')
+            cursor.execute('''
+                INSERT OR IGNORE INTO users (username, password_hash, role, password_changed, created_at)
+                VALUES (?, ?, 'viewer', 1, ?)
+            ''', ('viewer', viewer_hash, now))
         conn.commit()
     finally:
         conn.close()
@@ -134,6 +163,7 @@ def app(app_config, user_db_path):
     flask_app = create_app(app_config)
     # Override user_db_path to our test DB
     flask_app.config['user_db_path'] = user_db_path
+    flask_app.config['user_db_conn'] = None
     return flask_app
 
 

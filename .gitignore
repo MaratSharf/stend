@@ -12,8 +12,11 @@ mes_production/data/mes.db
 *.log
 *.tmp
 *.swp
+.coverage
 
 # Environment
+venv/
+.venv/
 .env
 .env.local
 *.env.*

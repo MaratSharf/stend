@@ -7,7 +7,7 @@ Provides:
   - authenticate(username, password) helper
   - require_role decorator
   - require_operator_role — write endpoints require operator+
-1  - require_permission decorator — permission-based access control
+  - require_permission decorator — permission-based access control
   - CSRF token generation/validation
   - init_default_users() — creates admin if no users exist
 """
@@ -16,13 +16,26 @@ import functools
 import hashlib
 import os
 import time
-from typing import Optional, List
+from typing import Optional, List, Union
 
 from flask import abort, redirect, request, url_for, session, jsonify as flask_jsonify
 from flask_login import LoginManager, current_user
 
 from web.models import User
 from utils.permissions import PERMISSIONS
+from utils.db_connection import DBConnection
+
+
+def _get_db() -> DBConnection:
+    """Get DBConnection from app config."""
+    from flask import current_app
+    pg_conn = current_app.config.get('user_db_conn')
+    if pg_conn:
+        return DBConnection(pg_conn)
+    db_path = current_app.config.get('user_db_path')
+    if db_path:
+        return DBConnection(db_path)
+    return None
 
 
 def get_user_permissions(user_id: int) -> List[str]:
@@ -30,27 +43,24 @@ def get_user_permissions(user_id: int) -> List[str]:
     Get all permission keys for a user based on their role.
     Returns list of permission strings from role_permissions table.
     """
-    from flask import current_app
-    db_path = current_app.config.get('user_db_path')
-    if not db_path:
+    db = _get_db()
+    if not db:
         return []
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = db.get_connection()
     try:
-        cursor = conn.cursor()
-        # Get user's role
-        cursor.execute('SELECT role FROM users WHERE id = ?', (user_id,))
+        cursor = db.cursor(conn)
+        ph = db.placeholder()
+        cursor.execute(f'SELECT role FROM users WHERE id = {ph}', (user_id,))
         row = cursor.fetchone()
         if not row:
             return []
-        
+
         role = row['role']
-        
-        # Get permissions for this role from role_permissions table
-        cursor.execute('''
-            SELECT permission FROM role_permissions WHERE role = ?
-        ''', (role,))
+        cursor.execute(
+            f'SELECT permission FROM role_permissions WHERE role = {ph}',
+            (role,)
+        )
         return [r['permission'] for r in cursor.fetchall()]
     finally:
         conn.close()
@@ -61,21 +71,19 @@ def user_has_permission(user_id: int, permission: str) -> bool:
     Check if a user has a specific permission.
     Admin users always have all permissions.
     """
-    # First check if user is admin by looking up their role in DB
-    from flask import current_app
-    db_path = current_app.config.get('user_db_path')
-    if db_path:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+    db = _get_db()
+    if db:
+        conn = db.get_connection()
         try:
-            cursor = conn.cursor()
-            cursor.execute('SELECT role FROM users WHERE id = ?', (user_id,))
+            cursor = db.cursor(conn)
+            ph = db.placeholder()
+            cursor.execute(f'SELECT role FROM users WHERE id = {ph}', (user_id,))
             row = cursor.fetchone()
             if row and row['role'] == 'admin':
                 return True
         finally:
             conn.close()
-    
+
     if permission in PERMISSIONS:
         permissions = get_user_permissions(user_id)
         return permission in permissions
@@ -85,12 +93,6 @@ def user_has_permission(user_id: int, permission: str) -> bool:
 def require_permission(permission: str):
     """
     Decorator: requires the user to have a specific permission.
-    
-    Usage:
-        @app.route('/api/orders', methods=['POST'])
-        @login_required
-        @require_permission('create_order')
-        def api_create_order(): ...
     """
     def decorator(f):
         @functools.wraps(f)
@@ -99,7 +101,7 @@ def require_permission(permission: str):
                 if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
                     return jsonify_error('Unauthorized', 401)
                 return redirect(url_for('login'))
-            
+
             if not user_has_permission(current_user.id, permission):
                 if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
                     return jsonify_error(f'Forbidden: {permission} permission required', 403)
@@ -119,18 +121,17 @@ login_manager.login_message = 'Войдите в систему для дост�
 @login_manager.user_loader
 def load_user(user_id: int) -> Optional[User]:
     """Load user from database by ID."""
-    from flask import current_app
-    db_path = current_app.config.get('user_db_path')
-    if not db_path:
+    db = _get_db()
+    if not db:
         return None
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = db.get_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
+        cursor = db.cursor(conn)
+        ph = db.placeholder()
+        cursor.execute(f'SELECT * FROM users WHERE id = {ph}', (user_id,))
         row = cursor.fetchone()
-        return User.from_dict(dict(row)) if row else None
+        return User.from_dict(db.dict_row(row)) if row else None
     finally:
         conn.close()
 
@@ -139,19 +140,18 @@ def load_user(user_id: int) -> Optional[User]:
 
 def authenticate(username: str, password: str) -> Optional[User]:
     """Verify username/password. Returns User or None."""
-    from flask import current_app
-    db_path = current_app.config.get('user_db_path')
-    if not db_path:
+    db = _get_db()
+    if not db:
         return None
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = db.get_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+        cursor = db.cursor(conn)
+        ph = db.placeholder()
+        cursor.execute(f'SELECT * FROM users WHERE username = {ph}', (username,))
         row = cursor.fetchone()
-        if row and User.from_dict(dict(row)).check_password(password):
-            return User.from_dict(dict(row))
+        if row and User.from_dict(db.dict_row(row)).check_password(password):
+            return User.from_dict(db.dict_row(row))
         return None
     finally:
         conn.close()
@@ -268,12 +268,6 @@ def jsonify_csrf_error():
 def require_role(role: str):
     """
     Decorator: requires the user to have at least the given role level.
-
-    Usage:
-        @app.route('/admin')
-        @login_required
-        @require_role('admin')
-        def admin_page(): ...
     """
     def decorator(f):
         @functools.wraps(f)
@@ -293,62 +287,95 @@ def require_role(role: str):
 
 # ── Default admin ────────────────────────────────────────────
 
-def init_default_users(db_path: str):
+def init_default_users(config: Union[str, dict]):
     """Create the users table and a default admin if no users exist."""
-    conn = sqlite3.connect(db_path)
+    db = DBConnection(config)
+    conn = db.get_connection()
     try:
-        cursor = conn.cursor()
+        cursor = db.cursor(conn)
 
         # ── Create role_permissions table ───────────────────────
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='role_permissions'")
-        if not cursor.fetchone():
-            cursor.execute('''
-                CREATE TABLE role_permissions (
-                    role TEXT NOT NULL,
-                    permission TEXT NOT NULL,
-                    PRIMARY KEY (role, permission)
-                )
-            ''')
-            # Insert default permissions
-            from utils.permissions import DEFAULT_ROLE_PERMISSIONS
-            for role, perms in DEFAULT_ROLE_PERMISSIONS.items():
-                for perm in perms:
-                    cursor.execute(
-                        'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
-                        (role, perm)
+        if not db.table_exists(conn, 'role_permissions'):
+            if db.engine == 'postgresql':
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS role_permissions (
+                        role TEXT NOT NULL,
+                        permission TEXT NOT NULL,
+                        PRIMARY KEY (role, permission)
                     )
+                ''')
+            else:
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS role_permissions (
+                        role TEXT NOT NULL,
+                        permission TEXT NOT NULL,
+                        PRIMARY KEY (role, permission)
+                    )
+                ''')
+            try:
+                from utils.permissions import DEFAULT_ROLE_PERMISSIONS
+                sql = db.insert_or_ignore_sql('role_permissions', ['role', 'permission'])
+                for role, perms in DEFAULT_ROLE_PERMISSIONS.items():
+                    for perm in perms:
+                        cursor.execute(sql, (role, perm))
+            except ImportError:
+                pass
 
         # ── Create users table ──────────────────────────────────
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'viewer',
-                is_active INTEGER NOT NULL DEFAULT 1,
-                password_changed INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL
-            )
-        ''')
+        if db.engine == 'postgresql':
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'viewer',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    password_changed INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                )
+            ''')
+        else:
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'viewer',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    password_changed INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                )
+            ''')
 
         # ── Migration: add password_changed column ──────────────
-        cursor.execute("PRAGMA table_info(users)")
-        col_names = [col[1] for col in cursor.fetchall()]
-        if 'password_changed' not in col_names:
-            cursor.execute("ALTER TABLE users ADD COLUMN password_changed INTEGER NOT NULL DEFAULT 1")
-            cursor.execute("UPDATE users SET password_changed = 1 WHERE password_changed IS NULL")
+        if not db.column_exists(conn, 'users', 'password_changed'):
+            if db.engine == 'postgresql':
+                cursor.execute("ALTER TABLE users ADD COLUMN password_changed INTEGER NOT NULL DEFAULT 1")
+                cursor.execute("UPDATE users SET password_changed = 1 WHERE password_changed IS NULL")
+            else:
+                cursor.execute("ALTER TABLE users ADD COLUMN password_changed INTEGER NOT NULL DEFAULT 1")
+                cursor.execute("UPDATE users SET password_changed = 1 WHERE password_changed IS NULL")
 
         # Check if any users exist
-        cursor.execute('SELECT COUNT(*) FROM users')
-        if cursor.fetchone()[0] == 0:
+        cursor.execute('SELECT COUNT(*) AS count FROM users')
+        row = cursor.fetchone()
+        count = row['count'] if isinstance(row, dict) else row[0]
+        if count == 0:
             # Create default admin — must change password on first login
             from werkzeug.security import generate_password_hash
             from datetime import datetime
             admin_hash = generate_password_hash('admin')
-            cursor.execute('''
-                INSERT INTO users (username, password_hash, role, password_changed, created_at)
-                VALUES (?, ?, 'admin', 0, ?)
-            ''', ('admin', admin_hash, datetime.now().isoformat()))
+            ph = db.placeholder()
+            if db.engine == 'postgresql':
+                cursor.execute(f'''
+                    INSERT INTO users (username, password_hash, role, password_changed, created_at)
+                    VALUES ({ph}, {ph}, 'admin', 0, {ph})
+                ''', ('admin', admin_hash, datetime.now().isoformat()))
+            else:
+                cursor.execute('''
+                    INSERT INTO users (username, password_hash, role, password_changed, created_at)
+                    VALUES (?, ?, 'admin', 0, ?)
+                ''', ('admin', admin_hash, datetime.now().isoformat()))
         conn.commit()
     finally:
         conn.close()
