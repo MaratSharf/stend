@@ -1,11 +1,10 @@
 """
 MES Production System — Database utility
-Supports both SQLite and PostgreSQL backends.
+PostgreSQL backend.
 
 Handles operations for orders, stations, and station logs.
 Supports sub-stations (e.g. 1.1, 1.2, 3.1) via REAL-valued station IDs.
 """
-import sqlite3
 import math
 import logging
 import os
@@ -23,100 +22,67 @@ except ImportError:
 class Database:
     def __init__(self, config: Union[str, dict], logger: logging.Logger = None):
         """
-        config: either a SQLite file path (str) or a dict with DB config.
-        For PostgreSQL, config must contain:
+        config: a dict with PostgreSQL DB config containing:
             engine: 'postgresql'
             host, port, name, user, password
-        For SQLite (legacy):
-            path: 'data/mes.db'
         """
         self.logger = logger or logging.getLogger('mes_db')
 
         if isinstance(config, str):
-            self.engine = 'sqlite'
-            self.db_path = config
-            os.makedirs(os.path.dirname(config) or '.', exist_ok=True)
-        else:
-            self.engine = config.get('engine', 'sqlite')
-            if self.engine == 'postgresql':
-                if not HAS_PSYCOPG2:
-                    raise RuntimeError("psycopg2-binary is required for PostgreSQL support")
-                self.pg_config = config
-            else:
-                self.db_path = config.get('path', 'data/mes.db')
-                os.makedirs(os.path.dirname(self.db_path) or '.', exist_ok=True)
+            raise RuntimeError("SQLite is no longer supported. Please use PostgreSQL configuration.")
+        
+        self.engine = config.get('engine', 'postgresql')
+        if self.engine != 'postgresql':
+            raise RuntimeError("Only PostgreSQL engine is supported")
+            
+        if not HAS_PSYCOPG2:
+            raise RuntimeError("psycopg2-binary is required for PostgreSQL support")
+        self.pg_config = config
 
         self.init_db()
 
     # ── Connection helpers ─────────────────────────────────────
 
     def get_connection(self):
-        if self.engine == 'postgresql':
-            conn = psycopg2.connect(
-                host=self.pg_config['host'],
-                port=self.pg_config['port'],
-                dbname=self.pg_config['name'],
-                user=self.pg_config['user'],
-                password=self.pg_config['password']
-            )
-            return conn
-        else:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys = ON")
-            return conn
+        conn = psycopg2.connect(
+            host=self.pg_config['host'],
+            port=self.pg_config['port'],
+            dbname=self.pg_config['name'],
+            user=self.pg_config['user'],
+            password=self.pg_config['password']
+        )
+        return conn
 
     def _cursor(self, conn):
-        if self.engine == 'postgresql':
-            return conn.cursor(cursor_factory=RealDictCursor)
-        return conn.cursor()
+        return conn.cursor(cursor_factory=RealDictCursor)
 
     def _table_exists(self, cursor, table_name: str) -> bool:
-        if self.engine == 'postgresql':
-            cursor.execute(
-                "SELECT 1 FROM information_schema.tables WHERE table_name = %s",
-                (table_name,)
-            )
-        else:
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                (table_name,)
-            )
+        cursor.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_name = %s",
+            (table_name,)
+        )
         return cursor.fetchone() is not None
 
     def _column_exists(self, cursor, table_name: str, column_name: str) -> bool:
-        if self.engine == 'postgresql':
-            cursor.execute(
-                """SELECT 1 FROM information_schema.columns
-                   WHERE table_name = %s AND column_name = %s""",
-                (table_name, column_name)
-            )
-            return cursor.fetchone() is not None
-        else:
-            cursor.execute(f"PRAGMA table_info({table_name})")
-            col_names = [row['name'] for row in cursor.fetchall()]
-            return column_name in col_names
+        cursor.execute(
+            """SELECT 1 FROM information_schema.columns
+               WHERE table_name = %s AND column_name = %s""",
+            (table_name, column_name)
+        )
+        return cursor.fetchone() is not None
 
     def _lastrowid(self, cursor) -> int:
-        if self.engine == 'postgresql':
-            return cursor.fetchone()['id']
-        return cursor.lastrowid
+        return cursor.fetchone()['id']
 
     def _placeholder(self, n: int = 1) -> Union[str, tuple]:
         """Return SQL placeholders. For single value returns string, for multiple returns tuple string."""
-        if self.engine == 'postgresql':
-            return '%s'
-        return '?'
+        return '%s'
 
     def _insert_or_ignore(self, table: str, columns: List[str], values: tuple) -> str:
         """Build INSERT OR IGNORE / ON CONFLICT query."""
         cols = ', '.join(columns)
-        if self.engine == 'postgresql':
-            ph = ', '.join(['%s'] * len(columns))
-            return f"INSERT INTO {table} ({cols}) VALUES ({ph}) ON CONFLICT DO NOTHING"
-        else:
-            ph = ', '.join(['?'] * len(columns))
-            return f"INSERT OR IGNORE INTO {table} ({cols}) VALUES ({ph})"
+        ph = ', '.join(['%s'] * len(columns))
+        return f"INSERT INTO {table} ({cols}) VALUES ({ph}) ON CONFLICT DO NOTHING"
 
     # ── Table init ──────────────────────────────────────────────
 
@@ -129,22 +95,13 @@ class Database:
             # ── Migration: Add role_permissions table ─────────────
             if not self._table_exists(cursor, 'role_permissions'):
                 self.logger.info("Migration: creating role_permissions table")
-                if self.engine == 'postgresql':
-                    cursor.execute('''
-                        CREATE TABLE role_permissions (
-                            role TEXT NOT NULL,
-                            permission TEXT NOT NULL,
-                            PRIMARY KEY (role, permission)
-                        )
-                    ''')
-                else:
-                    cursor.execute('''
-                        CREATE TABLE IF NOT EXISTS role_permissions (
-                            role TEXT NOT NULL,
-                            permission TEXT NOT NULL,
-                            PRIMARY KEY (role, permission)
-                        )
-                    ''')
+                cursor.execute('''
+                    CREATE TABLE role_permissions (
+                        role TEXT NOT NULL,
+                        permission TEXT NOT NULL,
+                        PRIMARY KEY (role, permission)
+                    )
+                ''')
                 try:
                     from utils.permissions import DEFAULT_ROLE_PERMISSIONS
                     for role, perms in DEFAULT_ROLE_PERMISSIONS.items():
@@ -157,88 +114,50 @@ class Database:
                     pass
 
             # ── Normal table creation ─────────────────────────────
-            if self.engine == 'postgresql':
-                cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS orders (
-                        id SERIAL PRIMARY KEY,
-                        batch TEXT NOT NULL,
-                        order_number TEXT UNIQUE NOT NULL,
-                        product_code TEXT NOT NULL,
-                        color TEXT NOT NULL,
-                        quantity INTEGER NOT NULL,
-                        status TEXT DEFAULT 'buffer',
-                        current_station REAL,
-                        completed_subs TEXT DEFAULT '',
-                        created_at TEXT NOT NULL,
-                        started_at TEXT,
-                        completed_at TEXT
-                    )
-                ''')
-                cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS stations (
-                        id REAL PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        order_id INTEGER REFERENCES orders(id)
-                    )
-                ''')
-                cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS station_log (
-                        id SERIAL PRIMARY KEY,
-                        order_id INTEGER NOT NULL REFERENCES orders(id),
-                        station_id REAL NOT NULL REFERENCES stations(id),
-                        entered_at TEXT NOT NULL,
-                        exited_at TEXT,
-                        result TEXT DEFAULT 'OK'
-                    )
-                ''')
-                cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS qr_scans (
-                        id SERIAL PRIMARY KEY,
-                        order_id INTEGER NOT NULL REFERENCES orders(id),
-                        station_id REAL NOT NULL DEFAULT 6.1,
-                        qr_data TEXT NOT NULL,
-                        result TEXT DEFAULT 'OK',
-                        scanned_at TEXT NOT NULL,
-                        created_at TEXT NOT NULL
-                    )
-                ''')
-            else:
-                cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS orders (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        batch TEXT NOT NULL,
-                        order_number TEXT UNIQUE NOT NULL,
-                        product_code TEXT NOT NULL,
-                        color TEXT NOT NULL,
-                        quantity INTEGER NOT NULL,
-                        status TEXT DEFAULT 'buffer',
-                        current_station REAL,
-                        completed_subs TEXT DEFAULT '',
-                        created_at TEXT NOT NULL,
-                        started_at TEXT,
-                        completed_at TEXT
-                    )
-                ''')
-                cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS stations (
-                        id REAL PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        order_id INTEGER,
-                        FOREIGN KEY (order_id) REFERENCES orders(id)
-                    )
-                ''')
-                cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS station_log (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        order_id INTEGER NOT NULL,
-                        station_id REAL NOT NULL,
-                        entered_at TEXT NOT NULL,
-                        exited_at TEXT,
-                        result TEXT DEFAULT 'OK',
-                        FOREIGN KEY (order_id) REFERENCES orders(id),
-                        FOREIGN KEY (station_id) REFERENCES stations(id)
-                    )
-                ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS orders (
+                    id SERIAL PRIMARY KEY,
+                    batch TEXT NOT NULL,
+                    order_number TEXT UNIQUE NOT NULL,
+                    product_code TEXT NOT NULL,
+                    color TEXT NOT NULL,
+                    quantity INTEGER NOT NULL,
+                    status TEXT DEFAULT 'buffer',
+                    current_station REAL,
+                    completed_subs TEXT DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS stations (
+                    id REAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    order_id INTEGER REFERENCES orders(id)
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS station_log (
+                    id SERIAL PRIMARY KEY,
+                    order_id INTEGER NOT NULL REFERENCES orders(id),
+                    station_id REAL NOT NULL REFERENCES stations(id),
+                    entered_at TEXT NOT NULL,
+                    exited_at TEXT,
+                    result TEXT DEFAULT 'OK'
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS qr_scans (
+                    id SERIAL PRIMARY KEY,
+                    order_id INTEGER NOT NULL REFERENCES orders(id),
+                    station_id REAL NOT NULL DEFAULT 6.1,
+                    qr_data TEXT NOT NULL,
+                    result TEXT DEFAULT 'OK',
+                    scanned_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            ''')
 
             # ── Migration: add completed_subs column ──
             if not self._column_exists(cursor, 'orders', 'completed_subs'):
@@ -459,17 +378,11 @@ class Database:
                 cursor = self._cursor(conn)
                 ph = self._placeholder()
 
-                if self.engine == 'postgresql':
-                    cursor.execute(f'''
-                        INSERT INTO orders (batch, order_number, product_code, color, quantity, status, current_station, created_at)
-                        VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, 'buffer', NULL, {ph})
-                        RETURNING id
-                    ''', (batch, '', product_code, color, 1, created_at))
-                else:
-                    cursor.execute(f'''
-                        INSERT INTO orders (batch, order_number, product_code, color, quantity, status, current_station, created_at)
-                        VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, 'buffer', NULL, {ph})
-                    ''', (batch, '', product_code, color, 1, created_at))
+                cursor.execute(f'''
+                    INSERT INTO orders (batch, order_number, product_code, color, quantity, status, current_station, created_at)
+                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, 'buffer', NULL, {ph})
+                    RETURNING id
+                ''', (batch, '', product_code, color, 1, created_at))
 
                 order_id = self._lastrowid(cursor)
                 order_number = f"ORD-{order_id:04d}"
@@ -747,18 +660,11 @@ class Database:
                 main_id = int(station_id)
                 
                 # Find all sub-stations for this main station
-                if self.engine == 'postgresql':
-                    cursor.execute('''
-                        SELECT s.id FROM stations s 
-                        WHERE s.id > %s AND s.id < %s
-                        ORDER BY s.id
-                    ''', (float(main_id), float(main_id + 1)))
-                else:
-                    cursor.execute('''
-                        SELECT s.id FROM stations s 
-                        WHERE s.id > ? AND s.id < ?
-                        ORDER BY s.id
-                    ''', (float(main_id), float(main_id + 1)))
+                cursor.execute('''
+                    SELECT s.id FROM stations s 
+                    WHERE s.id > %s AND s.id < %s
+                    ORDER BY s.id
+                ''', (float(main_id), float(main_id + 1)))
                 sub_ids = [row['id'] for row in cursor.fetchall()]
                 
                 # Build list of all station IDs in this group (main + all subs)
@@ -766,22 +672,13 @@ class Database:
                 
                 # Get orders from all stations in the group
                 if len(ids) > 1:
-                    if self.engine == 'postgresql':
-                        placeholders = ','.join(['%s'] * len(ids))
-                        cursor.execute(f'''
-                            SELECT id, order_number, product_code, color, quantity, batch
-                            FROM orders
-                            WHERE current_station IN ({placeholders}) AND status = 'production'
-                            ORDER BY id
-                        ''', ids)
-                    else:
-                        placeholders = ','.join(['?'] * len(ids))
-                        cursor.execute(f'''
-                            SELECT id, order_number, product_code, color, quantity, batch
-                            FROM orders
-                            WHERE current_station IN ({placeholders}) AND status = 'production'
-                            ORDER BY id
-                        ''', ids)
+                    placeholders = ','.join(['%s'] * len(ids))
+                    cursor.execute(f'''
+                        SELECT id, order_number, product_code, color, quantity, batch
+                        FROM orders
+                        WHERE current_station IN ({placeholders}) AND status = 'production'
+                        ORDER BY id
+                    ''', ids)
                 else:
                     # Only main station exists, no sub-stations
                     cursor.execute(f'''
@@ -790,7 +687,6 @@ class Database:
                         WHERE current_station = {ph} AND status = 'production'
                         ORDER BY id
                     ''', (float(main_id),))
-                
                 station['orders'] = [dict(row) for row in cursor.fetchall()]
 
             return stations
