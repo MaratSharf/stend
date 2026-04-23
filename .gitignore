@@ -1,16 +1,10 @@
 ```
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
 # Logs
 *.log
 
 # Database
 mes_production/data/mes.db
 
-# Original rules preserved
-*.log
+# Log directory
+mes_production/data/logs/
 ```
