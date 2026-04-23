@@ -1181,14 +1181,14 @@ def create_app(config: dict = None) -> Flask:
         return jsonify(orders)
 
     @app.route('/api/stations', methods=['GET'])
-    @login_required
+    @require_auth_or_api_key
     def api_get_stations():
         """Get all stations status."""
         stations = controller.get_stations()
         return jsonify(stations)
 
     @app.route('/api/statistics', methods=['GET'])
-    @login_required
+    @require_auth_or_api_key
     def api_get_statistics():
         """Get production statistics."""
         stats = controller.get_statistics()
@@ -1297,6 +1297,34 @@ def create_app(config: dict = None) -> Flask:
         else:
             logger.warning("POST /api/orders/%d/complete-sub %.1f — FAILED", order_id, sub_id)
             return jsonify(result), 400
+
+    @app.route('/api/orders/<int:order_id>/scan-result', methods=['POST'])
+    @require_operator_or_api_key
+    def api_save_scan_result(order_id: int):
+        """Save QR scan result for an order at station 6.1."""
+        data = request.get_json()
+        if not data or 'qr_data' not in data:
+            return jsonify({'error': 'qr_data required'}), 400
+
+        qr_data = data['qr_data']
+        result = data.get('result', 'OK')
+        station_id = float(data.get('station_id', 6.1))
+
+        scan_result = db.save_qr_scan(order_id, qr_data, result, station_id)
+        if scan_result['success']:
+            logger.info("POST /api/orders/%d/scan-result — OK, qr_data=%s", order_id, qr_data)
+            return jsonify(scan_result)
+        else:
+            logger.warning("POST /api/orders/%d/scan-result — FAILED: %s", order_id, scan_result['message'])
+            return jsonify(scan_result), 400
+
+    @app.route('/api/orders/<int:order_id>/qr-scans', methods=['GET'])
+    @login_required
+    def api_get_qr_scans(order_id: int):
+        """Get all QR scans for a specific order."""
+        limit = request.args.get('limit', 50, type=int)
+        scans = db.get_qr_scans(order_id, limit)
+        return jsonify({'scans': scans, 'count': len(scans)})
 
     @app.route('/api/sub-stations', methods=['GET'])
     @login_required

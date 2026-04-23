@@ -195,15 +195,16 @@ def require_csrf(func):
 
 def require_auth_or_api_key(func):
     """
-    Decorator: requires EITHER a logged-in user session (with CSRF) OR a valid API key.
+    Decorator: requires EITHER a logged-in user session (with CSRF for POST) OR a valid API key.
     API key users bypass CSRF (they are scripts, not browsers).
+    GET requests only require authentication, not CSRF token.
     """
     @functools.wraps(func)
     def decorated(*args, **kwargs):
         # Check session auth first
         if current_user.is_authenticated:
-            # Session user → must have valid CSRF token
-            if not validate_csrf_token():
+            # Session user → CSRF required only for non-GET requests
+            if request.method != 'GET' and not validate_csrf_token():
                 return jsonify_csrf_error()
             return func(*args, **kwargs)
 

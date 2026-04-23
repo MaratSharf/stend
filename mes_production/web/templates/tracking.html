@@ -85,10 +85,21 @@
                 if (!grid) return;
 
                 fetch(API_BASE + '/api/stations')
-                    .then(function(r) { return r.json(); })
-                    .then(function(stations) { renderStations(stations); })
+                    .then(function(r) {
+                        if (!r.ok) {
+                            throw new Error('HTTP error: ' + r.status);
+                        }
+                        return r.json();
+                    })
+                    .then(function(stations) {
+                        if (!Array.isArray(stations)) {
+                            console.error('Expected array, got:', stations);
+                            throw new Error('Invalid response format');
+                        }
+                        renderStations(stations);
+                    })
                     .catch(function(err) {
-                        window.MESUtils.showToast('Ошибка загрузки станций', 'error');
+                        window.MESUtils.showToast('Ошибка загрузки станций: ' + err.message, 'error');
                         console.error(err);
                     });
             }

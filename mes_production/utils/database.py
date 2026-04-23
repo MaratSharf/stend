@@ -191,6 +191,17 @@ class Database:
                         result TEXT DEFAULT 'OK'
                     )
                 ''')
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS qr_scans (
+                        id SERIAL PRIMARY KEY,
+                        order_id INTEGER NOT NULL REFERENCES orders(id),
+                        station_id REAL NOT NULL DEFAULT 6.1,
+                        qr_data TEXT NOT NULL,
+                        result TEXT DEFAULT 'OK',
+                        scanned_at TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                ''')
             else:
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS orders (
@@ -286,6 +297,86 @@ class Database:
         """Get sub-station IDs for a main station."""
         ids = self._station_ids_sorted()
         return [sid for sid in ids if math.floor(sid) == int(main_id) and sid != float(int(main_id))]
+
+    def _get_target_station(self, target_main_id: float) -> float:
+        """Get the actual target station ID.
+        If target_main_id has sub-stations, return the first sub-station.
+        Otherwise, return target_main_id itself.
+        This ensures orders always go to sub-stations when available."""
+        subs = self._sub_stations_of(target_main_id)
+        if subs:
+            return min(subs)  # First sub-station
+        return target_main_id
+
+    def move_order_to_station(self, order_id: int, target_station: float) -> Dict[str, Any]:
+        """Move order to a specific station.
+        If target_station is a main station with sub-stations, 
+        automatically redirect to the first sub-station.
+        
+        This method ensures orders always go to sub-stations when available,
+        regardless of whether the target is specified as main or sub station ID."""
+        conn = self.get_connection()
+        try:
+            order = self.get_order(order_id)
+            if not order or order['status'] != 'production':
+                return {'success': False, 'message': 'Order not in production'}
+
+            current_station = order['current_station']
+            
+            # Get the actual target station (with sub-station if available)
+            actual_target = self._get_target_station(target_station)
+            
+            # If target is a sub-station, get its parent for comparison
+            target_parent = float(int(target_station))
+            
+            # Check if order is already at the target (or its sub-station)
+            if current_station == actual_target:
+                return {'success': True, 'message': f'Order already at station {actual_target}'}
+            
+            # If moving to a sub-station, verify order is at the parent station
+            if actual_target != target_station and current_station != target_parent:
+                # Order is not at parent, but check if it's at a sibling sub-station
+                if math.floor(current_station) == target_parent:
+                    pass  # Allow moving between sibling sub-stations
+                else:
+                    return {'success': False, 'message': f'Order is not at parent station {target_parent}'}
+
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+            exited_at = datetime.now().isoformat()
+
+            # Close current station log entry if exists
+            cursor.execute(f'''
+                UPDATE station_log
+                SET exited_at = {ph}, result = 'OK'
+                WHERE order_id = {ph} AND station_id = {ph} AND exited_at IS NULL
+            ''', (exited_at, order_id, current_station))
+
+            # Update order station
+            cursor.execute(f'''
+                UPDATE orders SET current_station = {ph} WHERE id = {ph}
+            ''', (actual_target, order_id))
+
+            # Log entry to new station
+            entered_at = datetime.now().isoformat()
+            cursor.execute(f'''
+                INSERT INTO station_log (order_id, station_id, entered_at, result)
+                VALUES ({ph}, {ph}, {ph}, 'OK')
+            ''', (order_id, actual_target, entered_at))
+
+            conn.commit()
+            if actual_target != target_station:
+                self.logger.info(f"Order {order_id} moved from {current_station} to {actual_target} (redirected from {target_station})")
+                return {'success': True, 'message': f'Order moved to sub-station {actual_target}', 'redirected': True, 'actual_station': actual_target}
+            else:
+                self.logger.info(f"Order {order_id} moved from {current_station} to {actual_target}")
+                return {'success': True, 'message': f'Order moved to station {actual_target}'}
+        except Exception as e:
+            self.logger.error(f"move_order_to_station({order_id}, {target_station}) failed: {e}", exc_info=True)
+            conn.rollback()
+            return {'success': False, 'message': f'Error: {str(e)}'}
+        finally:
+            conn.close()
 
     def complete_sub_station(self, order_id: int, sub_station_id: float) -> Dict[str, Any]:
         """Mark a sub-station as completed for an order."""
@@ -443,10 +534,20 @@ class Database:
     # ── State transitions ───────────────────────────────────────
 
     def launch_order(self, order_id: int) -> bool:
-        """Launch an order to the first station."""
+        """Launch an order to the first station (or first sub-station if exists)."""
         conn = self.get_connection()
         try:
-            first_id = self._station_ids_sorted()[0] if self._station_ids_sorted() else 1.0
+            all_ids = self._station_ids_sorted()
+            if not all_ids:
+                return False
+            
+            first_id = all_ids[0]
+            # If first station is a main station with subs, use first sub-station
+            if first_id == int(first_id):
+                subs = self._sub_stations_of(first_id)
+                if subs:
+                    first_id = min(subs)  # First sub-station
+            
             cursor = self._cursor(conn)
             started_at = datetime.now().isoformat()
             ph = self._placeholder()
@@ -476,7 +577,7 @@ class Database:
             conn.close()
 
     def move_order(self, order_id: int) -> Dict[str, Any]:
-        """Move order to the next station."""
+        """Move order to the next station (or first sub-station if exists)."""
         conn = self.get_connection()
         try:
             order = self.get_order(order_id)
@@ -512,6 +613,12 @@ class Database:
 
             if next_station is None:
                 return {'success': False, 'message': 'Order is already at the last station'}
+
+            # If next station is a main station with subs, move to first sub-station instead
+            if next_station == int(next_station):
+                next_subs = self._sub_stations_of(next_station)
+                if next_subs:
+                    next_station = min(next_subs)  # First sub-station
 
             cursor = self._cursor(conn)
             ph = self._placeholder()
@@ -619,7 +726,8 @@ class Database:
     # ── Queries ─────────────────────────────────────────────────
 
     def get_stations(self) -> List[Dict[str, Any]]:
-        """Get all stations with their current orders."""
+        """Get all stations with their current orders.
+        For main stations (integer IDs), includes orders from both main station and sub-stations."""
         conn = self.get_connection()
         try:
             cursor = self._cursor(conn)
@@ -632,12 +740,60 @@ class Database:
 
             ph = self._placeholder()
             for station in stations:
-                cursor.execute(f'''
-                    SELECT id, order_number, product_code, color, quantity, batch
-                    FROM orders
-                    WHERE current_station = {ph} AND status = 'production'
-                    ORDER BY id
-                ''', (station['id'],))
+                station_id = station['id']
+                # For main stations (integer IDs), also include orders from sub-stations
+                if station_id == int(station_id):
+                    main_id = int(station_id)
+                    # Main station: find all sub-stations (e.g., 6.0 -> 6.1, 6.2)
+                    # Sub-stations have IDs like 6.1, 6.2, etc. (main_id < id < main_id + 1)
+                    if self.engine == 'postgresql':
+                        cursor.execute('''
+                            SELECT s.id FROM stations s 
+                            WHERE s.id > %s AND s.id < %s
+                            ORDER BY s.id
+                        ''', (float(main_id), float(main_id + 1)))
+                    else:
+                        cursor.execute('''
+                            SELECT s.id FROM stations s 
+                            WHERE s.id > ? AND s.id < ?
+                            ORDER BY s.id
+                        ''', (float(main_id), float(main_id + 1)))
+                    sub_ids = [row['id'] for row in cursor.fetchall()]
+                    
+                    # Build IN clause for main + subs
+                    if sub_ids:
+                        ids = [float(main_id)] + sub_ids
+                        if self.engine == 'postgresql':
+                            placeholders = ','.join(['%s'] * len(ids))
+                            cursor.execute(f'''
+                                SELECT id, order_number, product_code, color, quantity, batch
+                                FROM orders
+                                WHERE current_station IN ({placeholders}) AND status = 'production'
+                                ORDER BY id
+                            ''', ids)
+                        else:
+                            placeholders = ','.join(['?'] * len(ids))
+                            cursor.execute(f'''
+                                SELECT id, order_number, product_code, color, quantity, batch
+                                FROM orders
+                                WHERE current_station IN ({placeholders}) AND status = 'production'
+                                ORDER BY id
+                            ''', ids)
+                    else:
+                        cursor.execute(f'''
+                            SELECT id, order_number, product_code, color, quantity, batch
+                            FROM orders
+                            WHERE current_station = {ph} AND status = 'production'
+                            ORDER BY id
+                        ''', (float(main_id),))
+                else:
+                    # Sub-station: only orders on this exact station
+                    cursor.execute(f'''
+                        SELECT id, order_number, product_code, color, quantity, batch
+                        FROM orders
+                        WHERE current_station = {ph} AND status = 'production'
+                        ORDER BY id
+                    ''', (station_id,))
                 station['orders'] = [dict(row) for row in cursor.fetchall()]
 
             return stations
@@ -662,5 +818,86 @@ class Database:
             ) if stats['total'] > 0 else 0.0
 
             return stats
+        finally:
+            conn.close()
+
+    # ── QR Scan operations ──────────────────────────────────────
+
+    def save_qr_scan(self, order_id: int, qr_data: str, result: str = 'OK', station_id: float = 6.1) -> Dict[str, Any]:
+        """Save a QR scan result to the database."""
+        conn = self.get_connection()
+        try:
+            order = self.get_order(order_id)
+            if not order:
+                return {'success': False, 'message': 'Order not found'}
+
+            if order['status'] != 'production':
+                return {'success': False, 'message': 'Order is not in production'}
+
+            if order['current_station'] != station_id:
+                return {'success': False, 'message': f'Order is not at station {station_id}'}
+
+            now = datetime.now().isoformat()
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+
+            if self.engine == 'postgresql':
+                cursor.execute(f'''
+                    INSERT INTO qr_scans (order_id, station_id, qr_data, result, scanned_at, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                ''', (order_id, station_id, qr_data, result, now, now))
+                scan_id = cursor.fetchone()['id']
+            else:
+                cursor.execute('''
+                    INSERT INTO qr_scans (order_id, station_id, qr_data, result, scanned_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (order_id, station_id, qr_data, result, now, now))
+                scan_id = cursor.lastrowid
+
+            conn.commit()
+            self.logger.info(f"QR scan saved: order_id={order_id}, qr_data={qr_data}, scan_id={scan_id}")
+            return {'success': True, 'scan_id': scan_id, 'message': 'QR scan saved successfully'}
+        except Exception as e:
+            self.logger.error(f"save_qr_scan({order_id}, {qr_data}) failed: {e}", exc_info=True)
+            conn.rollback()
+            return {'success': False, 'message': str(e)}
+        finally:
+            conn.close()
+
+    def get_qr_scans(self, order_id: Optional[int] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get QR scans, optionally filtered by order_id."""
+        conn = self.get_connection()
+        try:
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+
+            if order_id:
+                cursor.execute(f'''
+                    SELECT * FROM qr_scans WHERE order_id = {ph}
+                    ORDER BY scanned_at DESC
+                    LIMIT {ph}
+                ''', (order_id, limit))
+            else:
+                cursor.execute(f'''
+                    SELECT * FROM qr_scans
+                    ORDER BY scanned_at DESC
+                    LIMIT {ph}
+                ''', (limit,))
+
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_qr_scan(self, scan_id: int) -> Optional[Dict[str, Any]]:
+        """Get a single QR scan by ID."""
+        conn = self.get_connection()
+        try:
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+            cursor.execute(f'SELECT * FROM qr_scans WHERE id = {ph}', (scan_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
         finally:
             conn.close()

@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Scanner - Станция 6.1</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            color: #fff;
+        }
+
+        h1 {
+            margin-bottom: 10px;
+            font-size: 2.5rem;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .station-info {
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid #00ff88;
+            border-radius: 8px;
+            padding: 10px 20px;
+            margin-bottom: 30px;
+            font-size: 1.1rem;
+        }
+
+        .order-status-container {
+            background: rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            max-width: 600px;
+            width: 100%;
+            margin-bottom: 20px;
+        }
+
+        .order-status-container h3 {
+            margin-bottom: 15px;
+            color: #00ff88;
+        }
+
+        .scanner-container {
+            background: rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            max-width: 800px;
+            width: 100%;
+        }
+
+        #video-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            margin: 0 auto 20px;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #000;
+        }
+
+        #video {
+            width: 100%;
+            display: block;
+        }
+
+        #canvas {
+            display: none;
+        }
+
+        .overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 200px;
+            height: 200px;
+            border: 3px solid #00ff88;
+            border-radius: 12px;
+            box-shadow: 0 0 20px rgba(0,255,136,0.5);
+            pointer-events: none;
+        }
+
+        .overlay::before,
+        .overlay::after {
+            content: '';
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border-color: #00ff88;
+            border-style: solid;
+        }
+
+        .overlay::before {
+            top: -3px;
+            left: -3px;
+            border-width: 3px 0 0 3px;
+            border-radius: 12px 0 0 0;
+        }
+
+        .overlay::after {
+            top: -3px;
+            right: -3px;
+            border-width: 3px 3px 0 0;
+            border-radius: 0 12px 0 0;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 12px 30px;
+            font-size: 1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        #start-btn {
+            background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%);
+            color: #1a1a2e;
+        }
+
+        #start-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0,255,136,0.4);
+        }
+
+        #stop-btn {
+            background: linear-gradient(135deg, #ff4757 0%, #cc3344 100%);
+            color: #fff;
+        }
+
+        #stop-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(255,71,87,0.4);
+        }
+
+        #complete-btn {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: #fff;
+        }
+
+        #complete-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(52, 152, 219, 0.4);
+        }
+
+        #refresh-btn {
+            background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+            color: #fff;
+        }
+
+        #refresh-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(243, 156, 18, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .result-container {
+            background: rgba(0,0,0,0.3);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .result-container h3 {
+            margin-bottom: 15px;
+            color: #00ff88;
+        }
+
+        #result {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 8px;
+            word-break: break-all;
+            font-family: 'Courier New', monospace;
+            min-height: 60px;
+            border-left: 4px solid #00ff88;
+        }
+
+        #result.empty {
+            color: rgba(255,255,255,0.5);
+            font-style: italic;
+        }
+
+        .status {
+            text-align: center;
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 8px;
+            font-weight: 500;
+        }
+
+        .status.idle {
+            background: rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.7);
+        }
+
+        .status.scanning {
+            background: rgba(0,255,136,0.2);
+            color: #00ff88;
+        }
+
+        .status.error {
+            background: rgba(255,71,87,0.2);
+            color: #ff4757;
+        }
+
+        .status.success {
+            background: rgba(52, 152, 219, 0.2);
+            color: #3498db;
+        }
+
+        .status.waiting {
+            background: rgba(243, 156, 18, 0.2);
+            color: #f39c12;
+        }
+
+        .scan-history {
+            margin-top: 20px;
+        }
+
+        .scan-history h3 {
+            margin-bottom: 15px;
+            color: #00ff88;
+        }
+
+        #history-list {
+            max-height: 200px;
+            overflow-y: auto;
+            background: rgba(0,0,0,0.3);
+            border-radius: 8px;
+            padding: 10px;
+        }
+
+        .history-item {
+            padding: 10px;
+            margin-bottom: 8px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .history-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .history-time {
+            color: rgba(255,255,255,0.5);
+            font-size: 0.8rem;
+        }
+
+        .order-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .info-item {
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 6px;
+        }
+
+        .info-label {
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.6);
+        }
+
+        .info-value {
+            font-weight: 600;
+            margin-top: 5px;
+        }
+
+        .clear-btn {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.3);
+            color: rgba(255,255,255,0.7);
+            padding: 8px 20px;
+            font-size: 0.9rem;
+            margin-top: 10px;
+        }
+
+        .clear-btn:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 30px;
+            color: rgba(255,255,255,0.7);
+        }
+
+        .loading-spinner {
+            border: 4px solid rgba(255,255,255,0.1);
+            border-left-color: #00ff88;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .no-order {
+            text-align: center;
+            padding: 30px;
+            color: rgba(255,255,255,0.5);
+        }
+
+        .no-order-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 1.8rem;
+            }
+            
+            .overlay {
+                width: 150px;
+                height: 150px;
+            }
+            
+            button {
+                padding: 10px 20px;
+                font-size: 0.9rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>📷 QR Scanner</h1>
+    <div class="station-info">
+        🏭 Станция 6.1 — QR-scanner (Контроль)
+    </div>
+    
+    <div class="order-status-container">
+        <h3>📋 Текущий заказ</h3>
+        <div id="order-loading" class="loading">
+            <div class="loading-spinner"></div>
+            <div>Загрузка заказа со станции 6.1...</div>
+        </div>
+        <div id="order-status" style="display: none;">
+            <div id="order-info"></div>
+        </div>
+        <div id="no-order" class="no-order" style="display: none;">
+            <div class="no-order-icon">⏸️</div>
+            <div>Станция 6.1 пуста. Ожидание заказа...</div>
+            <button id="refresh-btn" style="margin-top: 15px;">Обновить статус</button>
+        </div>
+    </div>
+    
+    <div class="scanner-container">
+        <div id="video-container">
+            <video id="video" autoplay playsinline></video>
+            <div class="overlay"></div>
+        </div>
+        
+        <canvas id="canvas"></canvas>
+        
+        <div class="controls">
+            <button id="start-btn" disabled>Запустить камеру</button>
+            <button id="stop-btn" disabled>Остановить</button>
+            <button id="complete-btn" disabled>Завершить станцию</button>
+        </div>
+        
+        <div id="status" class="status idle">Ожидание заказа...</div>
+        
+        <div class="result-container">
+            <h3>📊 Результат сканирования</h3>
+            <div id="result" class="empty">QR-код не сканирован</div>
+        </div>
+        
+        <div class="scan-history">
+            <h3>📜 История сканирований</h3>
+            <div id="history-list">
+                <div style="text-align: center; color: rgba(255,255,255,0.5); padding: 20px;">История пуста</div>
+            </div>
+            <button class="clear-btn" id="clear-history">Очистить историю</button>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <script>
+        const API_URL = '{{ mes_api_url }}' || 'http://localhost:5000';
+        const QR_SCANNER_URL = 'http://localhost:5001';
+        const API_KEY = '{{ api_key }}' || 'change-me-to-a-secure-key';
+        
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const completeBtn = document.getElementById('complete-btn');
+        const refreshBtn = document.getElementById('refresh-btn');
+        const orderLoadingDiv = document.getElementById('order-loading');
+        const orderStatusDiv = document.getElementById('order-status');
+        const noOrderDiv = document.getElementById('no-order');
+        const orderInfoDiv = document.getElementById('order-info');
+        const resultDiv = document.getElementById('result');
+        const statusDiv = document.getElementById('status');
+        const historyList = document.getElementById('history-list');
+        const clearHistoryBtn = document.getElementById('clear-history');
+
+        let stream = null;
+        let scanning = false;
+        let animationId = null;
+        let lastScan = null;
+        let currentOrderId = null;
+        let currentOrderNumber = null;
+
+        let scanHistory = JSON.parse(localStorage.getItem('qrScanHistory')) || [];
+        updateHistoryDisplay();
+
+        // Автоматическая загрузка заказа при запуске страницы
+        async function loadCurrentOrder() {
+            orderLoadingDiv.style.display = 'block';
+            orderStatusDiv.style.display = 'none';
+            noOrderDiv.style.display = 'none';
+            startBtn.disabled = true;
+            completeBtn.disabled = true;
+
+            try {
+                const response = await fetch(`${QR_SCANNER_URL}/api/current-order`, {
+                    headers: {
+                        'X-API-Key': API_KEY
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to fetch current order');
+                }
+
+                const data = await response.json();
+
+                if (data.success) {
+                    if (data.order_id) {
+                        // Заказ найден на станции 6.1
+                        currentOrderId = data.order_id;
+                        currentOrderNumber = data.order_number;
+                        
+                        if (data.order) {
+                            displayOrderInfo(data.order);
+                        } else {
+                            // Показываем базовую информацию
+                            orderInfoDiv.innerHTML = `
+                                <div class="info-item">
+                                    <div class="info-label">Номер заказа</div>
+                                    <div class="info-value">${data.order_number}</div>
+                                </div>
+                            `;
+                        }
+                        
+                        orderLoadingDiv.style.display = 'none';
+                        orderStatusDiv.style.display = 'block';
+                        statusDiv.textContent = `Заказ ${currentOrderNumber} готов к сканированию`;
+                        statusDiv.className = 'status success';
+                        startBtn.disabled = false;
+                        completeBtn.disabled = false;
+                    } else {
+                        // Станция пуста
+                        orderLoadingDiv.style.display = 'none';
+                        noOrderDiv.style.display = 'block';
+                        statusDiv.textContent = 'Станция 6.1 пуста. Ожидание заказа...';
+                        statusDiv.className = 'status waiting';
+                    }
+                } else {
+                    throw new Error(data.message || 'Unknown error');
+                }
+            } catch (error) {
+                console.error('Ошибка загрузки заказа:', error);
+                orderLoadingDiv.style.display = 'none';
+                noOrderDiv.style.display = 'block';
+                noOrderDiv.querySelector('div:nth-child(2)').textContent = 'Ошибка соединения с MES. ' + error.message;
+                statusDiv.textContent = 'Ошибка загрузки заказа';
+                statusDiv.className = 'status error';
+            }
+        }
+
+        function displayOrderInfo(order) {
+            orderInfoDiv.innerHTML = `
+                <div class="info-item">
+                    <div class="info-label">Номер заказа</div>
+                    <div class="info-value">${order.order_number || currentOrderNumber}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Партия</div>
+                    <div class="info-value">${order.batch}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Продукт</div>
+                    <div class="info-value">${order.product_code}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Цвет</div>
+                    <div class="info-value">${order.color}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Количество</div>
+                    <div class="info-value">${order.quantity}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Статус</div>
+                    <div class="info-value">${order.status}</div>
+                </div>
+            `;
+        }
+
+        async function startCamera() {
+            if (!currentOrderId) {
+                statusDiv.textContent = 'Нет активного заказа';
+                statusDiv.className = 'status error';
+                return;
+            }
+
+            try {
+                statusDiv.textContent = 'Запрос доступа к камере...';
+                statusDiv.className = 'status scanning';
+
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'environment',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                });
+
+                video.srcObject = stream;
+                
+                await new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        resolve();
+                    };
+                });
+
+                scanning = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                statusDiv.textContent = '🔍 Сканирование...';
+                statusDiv.className = 'status scanning';
+                
+                scanQRCode();
+            } catch (error) {
+                console.error('Ошибка доступа к камере:', error);
+                statusDiv.textContent = '❌ Ошибка: ' + error.message;
+                statusDiv.className = 'status error';
+            }
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+
+            scanning = false;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            statusDiv.textContent = 'Остановлено';
+            statusDiv.className = 'status idle';
+        }
+
+        async function scanQRCode() {
+            if (!scanning) return;
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+            if (code) {
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString('ru-RU');
+                
+                drawDetectionFrame();
+                
+                resultDiv.textContent = code.data;
+                resultDiv.classList.remove('empty');
+                
+                if (lastScan !== code.data) {
+                    await sendScanToMES(code.data, currentOrderId);
+                    addToHistory(code.data, timeStr);
+                    lastScan = code.data;
+                }
+
+                setTimeout(() => {
+                    animationId = requestAnimationFrame(scanQRCode);
+                }, 500);
+            } else {
+                animationId = requestAnimationFrame(scanQRCode);
+            }
+        }
+
+        async function sendScanToMES(qrData, orderId) {
+            try {
+                const response = await fetch(`${QR_SCANNER_URL}/api/scan/${orderId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': API_KEY
+                    },
+                    body: JSON.stringify({
+                        qr_data: qrData,
+                        result: 'OK'
+                    })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    statusDiv.textContent = '✓ Результат сохранён в MES';
+                    statusDiv.className = 'status success';
+                } else {
+                    statusDiv.textContent = '⚠ MES: ' + (result.message || 'Ошибка');
+                    statusDiv.className = 'status error';
+                }
+            } catch (error) {
+                console.error('Ошибка отправки в MES:', error);
+                statusDiv.textContent = '⚠ Не удалось сохранить в MES';
+                statusDiv.className = 'status error';
+            }
+        }
+
+        function drawDetectionFrame() {
+            const overlay = document.querySelector('.overlay');
+            overlay.style.borderColor = '#ff4757';
+            overlay.style.boxShadow = '0 0 30px rgba(255,71,87,0.8)';
+            
+            setTimeout(() => {
+                overlay.style.borderColor = '#00ff88';
+                overlay.style.boxShadow = '0 0 20px rgba(0,255,136,0.5)';
+            }, 300);
+        }
+
+        function addToHistory(data, time) {
+            scanHistory.unshift({ data, time });
+            
+            if (scanHistory.length > 10) {
+                scanHistory = scanHistory.slice(0, 10);
+            }
+            
+            localStorage.setItem('qrScanHistory', JSON.stringify(scanHistory));
+            updateHistoryDisplay();
+        }
+
+        function updateHistoryDisplay() {
+            if (scanHistory.length === 0) {
+                historyList.innerHTML = '<div style="text-align: center; color: rgba(255,255,255,0.5); padding: 20px;">История пуста</div>';
+                clearHistoryBtn.disabled = true;
+                return;
+            }
+
+            clearHistoryBtn.disabled = false;
+            historyList.innerHTML = scanHistory.map(item => `
+                <div class="history-item">
+                    <span>${escapeHtml(item.data)}</span>
+                    <span class="history-time">${item.time}</span>
+                </div>
+            `).join('');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function clearHistory() {
+            scanHistory = [];
+            localStorage.removeItem('qrScanHistory');
+            updateHistoryDisplay();
+        }
+
+        async function completeStation() {
+            if (!currentOrderId) {
+                statusDiv.textContent = 'Нет активного заказа';
+                statusDiv.className = 'status error';
+                return;
+            }
+
+            if (!confirm('Завершить подстанцию 6.1 и передать заказ на следующую станцию?')) {
+                return;
+            }
+
+            try {
+                statusDiv.textContent = 'Завершение подстанции 6.1...';
+                statusDiv.className = 'status scanning';
+
+                const response = await fetch(`${QR_SCANNER_URL}/api/complete-station`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': API_KEY
+                    },
+                    body: JSON.stringify({
+                        order_id: currentOrderId
+                    })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    statusDiv.textContent = '✓ Подстанция 6.1 завершена! Заказ передан на следующую станцию.';
+                    statusDiv.className = 'status success';
+                    completeBtn.disabled = true;
+                    stopCamera();
+                    
+                    // Сброс текущего заказа и повторная загрузка
+                    currentOrderId = null;
+                    currentOrderNumber = null;
+                    setTimeout(() => {
+                        loadCurrentOrder();
+                    }, 1000);
+                } else {
+                    statusDiv.textContent = '⚠ Ошибка: ' + (result.message || 'Unknown error');
+                    statusDiv.className = 'status error';
+                }
+            } catch (error) {
+                console.error('Ошибка завершения станции:', error);
+                statusDiv.textContent = '⚠ Не удалось завершить станцию: ' + error.message;
+                statusDiv.className = 'status error';
+            }
+        }
+
+        startBtn.addEventListener('click', startCamera);
+        stopBtn.addEventListener('click', stopCamera);
+        completeBtn.addEventListener('click', completeStation);
+        refreshBtn.addEventListener('click', loadCurrentOrder);
+        clearHistoryBtn.addEventListener('click', clearHistory);
+
+        // Автоматическая загрузка заказа при загрузке страницы
+        document.addEventListener('DOMContentLoaded', loadCurrentOrder);
+
+        window.addEventListener('beforeunload', stopCamera);
+    </script>
+</body>
+</html>

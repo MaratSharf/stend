@@ -20,6 +20,8 @@ stations:
   - name: Сборка
   - name: Пайка
   - name: Контроль
+    subs:
+      - QR-scanner 6.1
   - name: Тестирование
   - name: Упаковка
   - name: Маркировка
