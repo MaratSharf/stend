@@ -1,5 +1,10 @@
 database:
-  path: data/mes.db
+  engine: postgresql
+  host: localhost
+  port: 5432
+  name: mes_production
+  user: mes_user
+  password: mes_password
 server:
   host: 0.0.0.0
   port: 5000
@@ -15,6 +20,8 @@ stations:
   - name: Сборка
   - name: Пайка
   - name: Контроль
+    subs:
+      - QR-scanner 6.1
   - name: Тестирование
   - name: Упаковка
   - name: Маркировка

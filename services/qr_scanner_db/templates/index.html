@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Scanner - MES Production</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            color: #fff;
+        }
+
+        h1 {
+            margin-bottom: 10px;
+            font-size: 2.5rem;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .subtitle {
+            margin-bottom: 30px;
+            color: rgba(255,255,255,0.7);
+            font-size: 1rem;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            max-width: 1400px;
+            width: 100%;
+        }
+
+        .scanner-section, .history-section {
+            background: rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        }
+
+        h2 {
+            margin-bottom: 20px;
+            color: #00ff88;
+            font-size: 1.3rem;
+        }
+
+        #video-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            margin: 0 auto 20px;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #000;
+        }
+
+        #video {
+            width: 100%;
+            display: block;
+        }
+
+        #canvas {
+            display: none;
+        }
+
+        .overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 200px;
+            height: 200px;
+            border: 3px solid #00ff88;
+            border-radius: 12px;
+            box-shadow: 0 0 20px rgba(0,255,136,0.5);
+            pointer-events: none;
+        }
+
+        .overlay::before,
+        .overlay::after {
+            content: '';
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border-color: #00ff88;
+            border-style: solid;
+        }
+
+        .overlay::before {
+            top: -3px;
+            left: -3px;
+            border-width: 3px 0 0 3px;
+            border-radius: 12px 0 0 0;
+        }
+
+        .overlay::after {
+            top: -3px;
+            right: -3px;
+            border-width: 3px 3px 0 0;
+            border-radius: 0 12px 0 0;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 12px 30px;
+            font-size: 1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        #start-btn {
+            background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%);
+            color: #1a1a2e;
+        }
+
+        #start-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0,255,136,0.4);
+        }
+
+        #stop-btn {
+            background: linear-gradient(135deg, #ff4757 0%, #cc3344 100%);
+            color: #fff;
+        }
+
+        #stop-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(255,71,87,0.4);
+        }
+
+        #refresh-btn {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: #fff;
+        }
+
+        #refresh-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(52,152,219,0.4);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .result-box {
+            background: rgba(0,0,0,0.3);
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .result-box h3 {
+            margin-bottom: 10px;
+            color: #00ff88;
+            font-size: 1rem;
+        }
+
+        #result {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 8px;
+            word-break: break-all;
+            font-family: 'Courier New', monospace;
+            min-height: 40px;
+            border-left: 4px solid #00ff88;
+        }
+
+        #result.empty {
+            color: rgba(255,255,255,0.5);
+            font-style: italic;
+        }
+
+        #status {
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            font-weight: 500;
+        }
+
+        #status.idle {
+            background: rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.7);
+        }
+
+        #status.scanning {
+            background: rgba(0,255,136,0.2);
+            color: #00ff88;
+        }
+
+        #status.error {
+            background: rgba(255,71,87,0.2);
+            color: #ff4757;
+        }
+
+        #status.success {
+            background: rgba(0,255,136,0.3);
+            color: #00ff88;
+        }
+
+        .meta-fields {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .meta-field {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .meta-field label {
+            font-size: 0.85rem;
+            color: rgba(255,255,255,0.7);
+            margin-bottom: 5px;
+        }
+
+        .meta-field input {
+            padding: 10px;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 6px;
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            font-family: 'Courier New', monospace;
+        }
+
+        .meta-field input:focus {
+            outline: none;
+            border-color: #00ff88;
+        }
+
+        #save-manual-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+            color: #fff;
+        }
+
+        #save-manual-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(155,89,182,0.4);
+        }
+
+        .history-list {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .history-item {
+            padding: 12px;
+            margin-bottom: 10px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            border-left: 3px solid #3498db;
+        }
+
+        .history-item .qr-data {
+            font-family: 'Courier New', monospace;
+            font-size: 0.95rem;
+            word-break: break-all;
+            margin-bottom: 8px;
+        }
+
+        .history-item .meta {
+            display: flex;
+            gap: 15px;
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.5);
+        }
+
+        .history-item .meta span {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .history-item .delete-btn {
+            float: right;
+            background: transparent;
+            border: none;
+            color: #ff4757;
+            padding: 5px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            opacity: 0.7;
+        }
+
+        .history-item .delete-btn:hover {
+            opacity: 1;
+            transform: none;
+        }
+
+        .empty-history {
+            text-align: center;
+            color: rgba(255,255,255,0.5);
+            padding: 40px 20px;
+        }
+
+        .stats {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: rgba(255,255,255,0.1);
+            padding: 15px 20px;
+            border-radius: 8px;
+            text-align: center;
+            flex: 1;
+        }
+
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #00ff88;
+        }
+
+        .stat-card .label {
+            font-size: 0.85rem;
+            color: rgba(255,255,255,0.7);
+        }
+
+        @media (max-width: 1024px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 1.8rem;
+            }
+
+            .overlay {
+                width: 150px;
+                height: 150px;
+            }
+
+            button {
+                padding: 10px 20px;
+                font-size: 0.9rem;
+            }
+
+            .meta-fields {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>📷 QR Scanner</h1>
+    <p class="subtitle">Интеграция с MES Production System</p>
+    
+    <div class="container">
+        <div class="scanner-section">
+            <h2>🎥 Камера</h2>
+            
+            <div id="video-container">
+                <video id="video" autoplay playsinline></video>
+                <div class="overlay"></div>
+            </div>
+            
+            <canvas id="canvas"></canvas>
+            
+            <div class="controls">
+                <button id="start-btn">Запустить камеру</button>
+                <button id="stop-btn" disabled>Остановить</button>
+                <button id="refresh-btn">Обновить список</button>
+            </div>
+            
+            <div id="status" class="status idle">Ожидание...</div>
+            
+            <div class="result-box" style="margin-top: 20px;">
+                <h3>📋 Последнее сканирование</h3>
+                <div id="result" class="empty">QR-код не сканирован</div>
+            </div>
+            
+            <div class="meta-fields" style="margin-top: 20px;">
+                <div class="meta-field">
+                    <label for="order-id">ID заказа (опционально)</label>
+                    <input type="number" id="order-id" placeholder="Например: 42">
+                </div>
+                <div class="meta-field">
+                    <label for="station-id">ID станции (опционально)</label>
+                    <input type="number" step="0.1" id="station-id" placeholder="Например: 1.1">
+                </div>
+            </div>
+            
+            <button id="save-manual-btn" style="width: 100%;">💾 Сохранить вручную</button>
+        </div>
+        
+        <div class="history-section">
+            <h2>📜 История сканирований в БД</h2>
+            
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="value" id="total-scans">0</div>
+                    <div class="label">Всего сканирований</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value" id="today-scans">0</div>
+                    <div class="label">Сегодня</div>
+                </div>
+            </div>
+            
+            <div class="history-list" id="history-list">
+                <div class="empty-history">Загрузка...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const refreshBtn = document.getElementById('refresh-btn');
+        const saveManualBtn = document.getElementById('save-manual-btn');
+        const resultDiv = document.getElementById('result');
+        const statusDiv = document.getElementById('status');
+        const historyList = document.getElementById('history-list');
+        const orderIdInput = document.getElementById('order-id');
+        const stationIdInput = document.getElementById('station-id');
+        const totalScansEl = document.getElementById('total-scans');
+        const todayScansEl = document.getElementById('today-scans');
+
+        let stream = null;
+        let scanning = false;
+        let animationId = null;
+        let lastScan = null;
+        let scanHistory = [];
+
+        // Запуск камеры
+        async function startCamera() {
+            try {
+                statusDiv.textContent = 'Запрос доступа к камере...';
+                statusDiv.className = 'status scanning';
+
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'environment',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                });
+
+                video.srcObject = stream;
+                
+                await new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        resolve();
+                    };
+                });
+
+                scanning = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                statusDiv.textContent = '🔍 Сканирование...';
+                
+                scanQRCode();
+            } catch (error) {
+                console.error('Ошибка доступа к камере:', error);
+                statusDiv.textContent = '❌ Ошибка: ' + error.message;
+                statusDiv.className = 'status error';
+            }
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+
+            scanning = false;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            statusDiv.textContent = 'Остановлено';
+            statusDiv.className = 'status idle';
+        }
+
+        function scanQRCode() {
+            if (!scanning) return;
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+            if (code) {
+                drawDetectionFrame();
+                handleScan(code.data);
+            } else {
+                animationId = requestAnimationFrame(scanQRCode);
+            }
+        }
+
+        function drawDetectionFrame() {
+            const overlay = document.querySelector('.overlay');
+            overlay.style.borderColor = '#ff4757';
+            overlay.style.boxShadow = '0 0 30px rgba(255,71,87,0.8)';
+            
+            setTimeout(() => {
+                overlay.style.borderColor = '#00ff88';
+                overlay.style.boxShadow = '0 0 20px rgba(0,255,136,0.5)';
+            }, 300);
+        }
+
+        async function handleScan(qrData) {
+            // Показать результат
+            resultDiv.textContent = qrData;
+            resultDiv.classList.remove('empty');
+            
+            // Сохранить в БД
+            await saveToDatabase(qrData);
+            
+            // Задержка перед продолжением
+            setTimeout(() => {
+                animationId = requestAnimationFrame(scanQRCode);
+            }, 1000);
+        }
+
+        async function saveToDatabase(qrData, manual = false) {
+            const orderId = orderIdInput.value ? parseInt(orderIdInput.value) : null;
+            const stationId = stationIdInput.value ? parseFloat(stationIdInput.value) : null;
+            
+            try {
+                const response = await fetch('/api/scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        qr_data: qrData,
+                        order_id: orderId,
+                        station_id: stationId,
+                        notes: manual ? 'Ручное сохранение' : 'Авто-сканирование'
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    statusDiv.textContent = '✅ ' + result.message;
+                    statusDiv.className = 'status success';
+                    setTimeout(() => {
+                        if (!scanning) return;
+                        statusDiv.textContent = '🔍 Сканирование...';
+                        statusDiv.className = 'status scanning';
+                    }, 2000);
+                    
+                    // Обновить список
+                    await loadScans();
+                } else {
+                    statusDiv.textContent = '❌ Ошибка сохранения: ' + result.error;
+                    statusDiv.className = 'status error';
+                }
+            } catch (error) {
+                console.error('Ошибка сохранения:', error);
+                statusDiv.textContent = '❌ Ошибка сети';
+                statusDiv.className = 'status error';
+            }
+        }
+
+        async function loadScans() {
+            try {
+                const response = await fetch('/api/scans?limit=50');
+                const data = await response.json();
+                
+                scanHistory = data.scans || [];
+                
+                // Подсчёт статистики
+                totalScansEl.textContent = data.count || 0;
+                
+                const today = new Date().toDateString();
+                const todayCount = scanHistory.filter(s => 
+                    new Date(s.scan_time).toDateString() === today
+                ).length;
+                todayScansEl.textContent = todayCount;
+                
+                // Отображение истории
+                if (scanHistory.length === 0) {
+                    historyList.innerHTML = '<div class="empty-history">История пуста</div>';
+                    return;
+                }
+                
+                historyList.innerHTML = scanHistory.map(item => `
+                    <div class="history-item" data-id="${item.id}">
+                        <button class="delete-btn" onclick="deleteScan(${item.id})">×</button>
+                        <div class="qr-data">${escapeHtml(item.qr_data)}</div>
+                        <div class="meta">
+                            <span>🕐 ${formatTime(item.scan_time)}</span>
+                            ${item.order_id ? `<span>📦 Заказ #${item.order_id}</span>` : ''}
+                            ${item.station_id ? `<span>🏭 Станция ${item.station_id}</span>` : ''}
+                        </div>
+                    </div>
+                `).join('');
+                
+            } catch (error) {
+                console.error('Ошибка загрузки истории:', error);
+                historyList.innerHTML = '<div class="empty-history">Ошибка загрузки</div>';
+            }
+        }
+
+        async function deleteScan(scanId) {
+            if (!confirm('Удалить эту запись?')) return;
+            
+            try {
+                const response = await fetch(`/api/scans/${scanId}`, {
+                    method: 'DELETE'
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    await loadScans();
+                } else {
+                    alert('Ошибка удаления: ' + result.error);
+                }
+            } catch (error) {
+                alert('Ошибка сети');
+            }
+        }
+
+        function formatTime(isoString) {
+            const date = new Date(isoString);
+            return date.toLocaleString('ru-RU', {
+                day: '2-digit',
+                month: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Обработчики событий
+        startBtn.addEventListener('click', startCamera);
+        stopBtn.addEventListener('click', stopCamera);
+        refreshBtn.addEventListener('click', loadScans);
+        saveManualBtn.addEventListener('click', () => {
+            const qrData = resultDiv.textContent;
+            if (qrData && qrData !== 'QR-код не сканирован') {
+                saveToDatabase(qrData, true);
+            }
+        });
+
+        // Загрузка истории при старте
+        loadScans();
+
+        // Остановка камеры при закрытии страницы
+        window.addEventListener('beforeunload', stopCamera);
+    </script>
+</body>
+</html>

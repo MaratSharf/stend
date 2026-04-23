@@ -17,13 +17,13 @@
                     <a href="/" {% if request.endpoint == 'index' %}class="active"{% endif %}>Заказы</a>
                     {% endif %}
                     {% if user.has_permission('production_view') %}
-                    <a href="/map" {% if request.endpoint == 'map_page' %}class="active"{% endif %}>Производство</a>
+                    <a href="/station" {% if request.endpoint == 'station' %}class="active"{% endif %}>Производство</a>
                     {% endif %}
                     {% if user.has_permission('map_view') %}
-                    <a href="/tracking" {% if request.endpoint == 'tracking' %}class="active"{% endif %}>Карта станций</a>
+                    <a href="/map" {% if request.endpoint == 'map_page' %}class="active"{% endif %}>Карта станций</a>
                     {% endif %}
                     {% if user.has_permission('station_view') %}
-                    <a href="/station" {% if request.endpoint == 'station' %}class="active"{% endif %}>Станция</a>
+                    <a href="/tracking" {% if request.endpoint == 'tracking' %}class="active"{% endif %}>Трекинг</a>
                     {% endif %}
                     {% if user.has_permission('user_view') %}
                     <a href="/users" {% if request.endpoint == 'users_page' %}class="active"{% endif %}>Пользователи</a>

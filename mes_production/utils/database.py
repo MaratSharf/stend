@@ -1,7 +1,8 @@
 """
 MES Production System — Database utility
-Handles SQLite operations for orders, stations, and station logs.
+Supports both SQLite and PostgreSQL backends.
 
+Handles operations for orders, stations, and station logs.
 Supports sub-stations (e.g. 1.1, 1.2, 3.1) via REAL-valued station IDs.
 """
 import sqlite3
@@ -9,70 +10,225 @@ import math
 import logging
 import os
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
+
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    HAS_PSYCOPG2 = True
+except ImportError:
+    HAS_PSYCOPG2 = False
 
 
 class Database:
-    def __init__(self, db_path: str, logger: logging.Logger = None):
-        self.db_path = db_path
+    def __init__(self, config: Union[str, dict], logger: logging.Logger = None):
+        """
+        config: either a SQLite file path (str) or a dict with DB config.
+        For PostgreSQL, config must contain:
+            engine: 'postgresql'
+            host, port, name, user, password
+        For SQLite (legacy):
+            path: 'data/mes.db'
+        """
         self.logger = logger or logging.getLogger('mes_db')
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+        if isinstance(config, str):
+            self.engine = 'sqlite'
+            self.db_path = config
+            os.makedirs(os.path.dirname(config) or '.', exist_ok=True)
+        else:
+            self.engine = config.get('engine', 'sqlite')
+            if self.engine == 'postgresql':
+                if not HAS_PSYCOPG2:
+                    raise RuntimeError("psycopg2-binary is required for PostgreSQL support")
+                self.pg_config = config
+            else:
+                self.db_path = config.get('path', 'data/mes.db')
+                os.makedirs(os.path.dirname(self.db_path) or '.', exist_ok=True)
+
         self.init_db()
 
-    def get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+    # ── Connection helpers ─────────────────────────────────────
+
+    def get_connection(self):
+        if self.engine == 'postgresql':
+            conn = psycopg2.connect(
+                host=self.pg_config['host'],
+                port=self.pg_config['port'],
+                dbname=self.pg_config['name'],
+                user=self.pg_config['user'],
+                password=self.pg_config['password']
+            )
+            return conn
+        else:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            return conn
+
+    def _cursor(self, conn):
+        if self.engine == 'postgresql':
+            return conn.cursor(cursor_factory=RealDictCursor)
+        return conn.cursor()
+
+    def _table_exists(self, cursor, table_name: str) -> bool:
+        if self.engine == 'postgresql':
+            cursor.execute(
+                "SELECT 1 FROM information_schema.tables WHERE table_name = %s",
+                (table_name,)
+            )
+        else:
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,)
+            )
+        return cursor.fetchone() is not None
+
+    def _column_exists(self, cursor, table_name: str, column_name: str) -> bool:
+        if self.engine == 'postgresql':
+            cursor.execute(
+                """SELECT 1 FROM information_schema.columns
+                   WHERE table_name = %s AND column_name = %s""",
+                (table_name, column_name)
+            )
+            return cursor.fetchone() is not None
+        else:
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            col_names = [row['name'] for row in cursor.fetchall()]
+            return column_name in col_names
+
+    def _lastrowid(self, cursor) -> int:
+        if self.engine == 'postgresql':
+            return cursor.fetchone()['id']
+        return cursor.lastrowid
+
+    def _placeholder(self, n: int = 1) -> Union[str, tuple]:
+        """Return SQL placeholders. For single value returns string, for multiple returns tuple string."""
+        if self.engine == 'postgresql':
+            return '%s'
+        return '?'
+
+    def _insert_or_ignore(self, table: str, columns: List[str], values: tuple) -> str:
+        """Build INSERT OR IGNORE / ON CONFLICT query."""
+        cols = ', '.join(columns)
+        if self.engine == 'postgresql':
+            ph = ', '.join(['%s'] * len(columns))
+            return f"INSERT INTO {table} ({cols}) VALUES ({ph}) ON CONFLICT DO NOTHING"
+        else:
+            ph = ', '.join(['?'] * len(columns))
+            return f"INSERT OR IGNORE INTO {table} ({cols}) VALUES ({ph})"
 
     # ── Table init ──────────────────────────────────────────────
 
     def init_db(self):
-        """Initialize database tables. current_station is REAL for sub-station support."""
+        """Initialize database tables."""
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = self._cursor(conn)
 
             # ── Migration: Add role_permissions table ─────────────
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='role_permissions'")
-            if not cursor.fetchone():
+            if not self._table_exists(cursor, 'role_permissions'):
                 self.logger.info("Migration: creating role_permissions table")
+                if self.engine == 'postgresql':
+                    cursor.execute('''
+                        CREATE TABLE role_permissions (
+                            role TEXT NOT NULL,
+                            permission TEXT NOT NULL,
+                            PRIMARY KEY (role, permission)
+                        )
+                    ''')
+                else:
+                    cursor.execute('''
+                        CREATE TABLE IF NOT EXISTS role_permissions (
+                            role TEXT NOT NULL,
+                            permission TEXT NOT NULL,
+                            PRIMARY KEY (role, permission)
+                        )
+                    ''')
+                try:
+                    from utils.permissions import DEFAULT_ROLE_PERMISSIONS
+                    for role, perms in DEFAULT_ROLE_PERMISSIONS.items():
+                        for perm in perms:
+                            cursor.execute(
+                                self._insert_or_ignore('role_permissions', ['role', 'permission'], (role, perm)),
+                                (role, perm)
+                            )
+                except ImportError:
+                    pass
+
+            # ── Normal table creation ─────────────────────────────
+            if self.engine == 'postgresql':
                 cursor.execute('''
-                    CREATE TABLE role_permissions (
-                        role TEXT NOT NULL,
-                        permission TEXT NOT NULL,
-                        PRIMARY KEY (role, permission)
+                    CREATE TABLE IF NOT EXISTS orders (
+                        id SERIAL PRIMARY KEY,
+                        batch TEXT NOT NULL,
+                        order_number TEXT UNIQUE NOT NULL,
+                        product_code TEXT NOT NULL,
+                        color TEXT NOT NULL,
+                        quantity INTEGER NOT NULL,
+                        status TEXT DEFAULT 'buffer',
+                        current_station REAL,
+                        completed_subs TEXT DEFAULT '',
+                        created_at TEXT NOT NULL,
+                        started_at TEXT,
+                        completed_at TEXT
                     )
                 ''')
-                # Insert default permissions
-                from utils.permissions import DEFAULT_ROLE_PERMISSIONS
-                for role, perms in DEFAULT_ROLE_PERMISSIONS.items():
-                    for perm in perms:
-                        cursor.execute(
-                            'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
-                            (role, perm)
-                        )
-
-            # ── Migration: INTEGER → REAL for stations ─────────────
-            # If old schema exists (id INTEGER), recreate with REAL
-            cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='stations'")
-            row = cursor.fetchone()
-            if row and 'INTEGER PRIMARY KEY' in row['sql']:
-                self.logger.info("Migrating stations table: INTEGER → REAL id")
-                cursor.execute('DROP TABLE IF EXISTS station_log')
-                cursor.execute('DROP TABLE IF EXISTS stations')
                 cursor.execute('''
-                    CREATE TABLE stations (
+                    CREATE TABLE IF NOT EXISTS stations (
+                        id REAL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        order_id INTEGER REFERENCES orders(id)
+                    )
+                ''')
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS station_log (
+                        id SERIAL PRIMARY KEY,
+                        order_id INTEGER NOT NULL REFERENCES orders(id),
+                        station_id REAL NOT NULL REFERENCES stations(id),
+                        entered_at TEXT NOT NULL,
+                        exited_at TEXT,
+                        result TEXT DEFAULT 'OK'
+                    )
+                ''')
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS qr_scans (
+                        id SERIAL PRIMARY KEY,
+                        order_id INTEGER NOT NULL REFERENCES orders(id),
+                        station_id REAL NOT NULL DEFAULT 6.1,
+                        qr_data TEXT NOT NULL,
+                        result TEXT DEFAULT 'OK',
+                        scanned_at TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                ''')
+            else:
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS orders (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        batch TEXT NOT NULL,
+                        order_number TEXT UNIQUE NOT NULL,
+                        product_code TEXT NOT NULL,
+                        color TEXT NOT NULL,
+                        quantity INTEGER NOT NULL,
+                        status TEXT DEFAULT 'buffer',
+                        current_station REAL,
+                        completed_subs TEXT DEFAULT '',
+                        created_at TEXT NOT NULL,
+                        started_at TEXT,
+                        completed_at TEXT
+                    )
+                ''')
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS stations (
                         id REAL PRIMARY KEY,
                         name TEXT NOT NULL,
                         order_id INTEGER,
                         FOREIGN KEY (order_id) REFERENCES orders(id)
                     )
                 ''')
-                # Recreate station_log with REAL station_id
-                cursor.execute('DROP TABLE IF EXISTS station_log')
                 cursor.execute('''
-                    CREATE TABLE station_log (
+                    CREATE TABLE IF NOT EXISTS station_log (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         order_id INTEGER NOT NULL,
                         station_id REAL NOT NULL,
@@ -83,49 +239,9 @@ class Database:
                         FOREIGN KEY (station_id) REFERENCES stations(id)
                     )
                 ''')
-                conn.commit()
-            # ── Normal table creation (always runs first) ─────────────
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS orders (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    batch TEXT NOT NULL,
-                    order_number TEXT UNIQUE NOT NULL,
-                    product_code TEXT NOT NULL,
-                    color TEXT NOT NULL,
-                    quantity INTEGER NOT NULL,
-                    status TEXT DEFAULT 'buffer',
-                    current_station REAL,
-                    completed_subs TEXT DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    started_at TEXT,
-                    completed_at TEXT
-                )
-            ''')
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS stations (
-                    id REAL PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    order_id INTEGER,
-                    FOREIGN KEY (order_id) REFERENCES orders(id)
-                )
-            ''')
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS station_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    order_id INTEGER NOT NULL,
-                    station_id REAL NOT NULL,
-                    entered_at TEXT NOT NULL,
-                    exited_at TEXT,
-                    result TEXT DEFAULT 'OK',
-                    FOREIGN KEY (order_id) REFERENCES orders(id),
-                    FOREIGN KEY (station_id) REFERENCES stations(id)
-                )
-            ''')
 
-            # ── Migration: add completed_subs column (after table exists) ──
-            cursor.execute("PRAGMA table_info(orders)")
-            col_names = [col['name'] for col in cursor.fetchall()]
-            if 'completed_subs' not in col_names:
+            # ── Migration: add completed_subs column ──
+            if not self._column_exists(cursor, 'orders', 'completed_subs'):
                 self.logger.info("Migration: adding completed_subs column to orders")
                 cursor.execute("ALTER TABLE orders ADD COLUMN completed_subs TEXT DEFAULT ''")
 
@@ -139,22 +255,6 @@ class Database:
     def flatten_stations(station_names: List[str]):
         """
         Convert config station list into flat [(id, name), ...] list.
-
-        Input:
-            [
-              {"name": "Приёмка",     "subs": ["Приёмка 1.1", "Приёмка 1.2"]},
-              {"name": "Сортировка"},
-              {"name": "Подготовка",  "subs": ["Подготовка 3.1"]},
-              {"name": "Сборка"},
-              ...
-            ]
-        Output:
-            [(1.1, "Приёмка 1.1"), (1.2, "Приёмка 1.2"),
-             (2,   "Сортировка"),
-             (3.1, "Подготовка 3.1"), (3, "Подготовка"),
-             (4,   "Сборка"), ...]
-        Sub-stations get decimal IDs (1.1, 1.2, 3.1).
-        Main stations keep integer IDs.
         """
         result = []
         main_idx = 0
@@ -163,10 +263,8 @@ class Database:
             if isinstance(entry, dict):
                 name = entry.get('name', '')
                 subs = entry.get('subs', [])
-                # Sub-stations first (decimal IDs)
                 for si, sname in enumerate(subs, 1):
                     result.append((float(f"{main_idx}.{si}"), sname))
-                # Then main station
                 result.append((float(main_idx), name))
             else:
                 result.append((float(main_idx), entry))
@@ -176,7 +274,7 @@ class Database:
         """Return sorted list of station IDs from DB."""
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = self._cursor(conn)
             cursor.execute('SELECT id FROM stations ORDER BY id')
             return [row['id'] for row in cursor.fetchall()]
         finally:
@@ -196,9 +294,89 @@ class Database:
         return ids[-1] if ids else 10.0
 
     def _sub_stations_of(self, main_id: float) -> List[float]:
-        """Get sub-station IDs for a main station (e.g. 1.1, 1.2 for main 1.0)."""
+        """Get sub-station IDs for a main station."""
         ids = self._station_ids_sorted()
         return [sid for sid in ids if math.floor(sid) == int(main_id) and sid != float(int(main_id))]
+
+    def _get_target_station(self, target_main_id: float) -> float:
+        """Get the actual target station ID.
+        If target_main_id has sub-stations, return the first sub-station.
+        Otherwise, return target_main_id itself.
+        This ensures orders always go to sub-stations when available."""
+        subs = self._sub_stations_of(target_main_id)
+        if subs:
+            return min(subs)  # First sub-station
+        return target_main_id
+
+    def move_order_to_station(self, order_id: int, target_station: float) -> Dict[str, Any]:
+        """Move order to a specific station.
+        If target_station is a main station with sub-stations, 
+        automatically redirect to the first sub-station.
+        
+        This method ensures orders always go to sub-stations when available,
+        regardless of whether the target is specified as main or sub station ID."""
+        conn = self.get_connection()
+        try:
+            order = self.get_order(order_id)
+            if not order or order['status'] != 'production':
+                return {'success': False, 'message': 'Order not in production'}
+
+            current_station = order['current_station']
+            
+            # Get the actual target station (with sub-station if available)
+            actual_target = self._get_target_station(target_station)
+            
+            # If target is a sub-station, get its parent for comparison
+            target_parent = float(int(target_station))
+            
+            # Check if order is already at the target (or its sub-station)
+            if current_station == actual_target:
+                return {'success': True, 'message': f'Order already at station {actual_target}'}
+            
+            # If moving to a sub-station, verify order is at the parent station
+            if actual_target != target_station and current_station != target_parent:
+                # Order is not at parent, but check if it's at a sibling sub-station
+                if math.floor(current_station) == target_parent:
+                    pass  # Allow moving between sibling sub-stations
+                else:
+                    return {'success': False, 'message': f'Order is not at parent station {target_parent}'}
+
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+            exited_at = datetime.now().isoformat()
+
+            # Close current station log entry if exists
+            cursor.execute(f'''
+                UPDATE station_log
+                SET exited_at = {ph}, result = 'OK'
+                WHERE order_id = {ph} AND station_id = {ph} AND exited_at IS NULL
+            ''', (exited_at, order_id, current_station))
+
+            # Update order station
+            cursor.execute(f'''
+                UPDATE orders SET current_station = {ph} WHERE id = {ph}
+            ''', (actual_target, order_id))
+
+            # Log entry to new station
+            entered_at = datetime.now().isoformat()
+            cursor.execute(f'''
+                INSERT INTO station_log (order_id, station_id, entered_at, result)
+                VALUES ({ph}, {ph}, {ph}, 'OK')
+            ''', (order_id, actual_target, entered_at))
+
+            conn.commit()
+            if actual_target != target_station:
+                self.logger.info(f"Order {order_id} moved from {current_station} to {actual_target} (redirected from {target_station})")
+                return {'success': True, 'message': f'Order moved to sub-station {actual_target}', 'redirected': True, 'actual_station': actual_target}
+            else:
+                self.logger.info(f"Order {order_id} moved from {current_station} to {actual_target}")
+                return {'success': True, 'message': f'Order moved to station {actual_target}'}
+        except Exception as e:
+            self.logger.error(f"move_order_to_station({order_id}, {target_station}) failed: {e}", exc_info=True)
+            conn.rollback()
+            return {'success': False, 'message': f'Error: {str(e)}'}
+        finally:
+            conn.close()
 
     def complete_sub_station(self, order_id: int, sub_station_id: float) -> Dict[str, Any]:
         """Mark a sub-station as completed for an order."""
@@ -208,12 +386,10 @@ class Database:
             if not order or order['status'] != 'production':
                 return {'success': False, 'message': 'Order not in production'}
 
-            # Verify the order is at the parent station
             parent = float(int(sub_station_id))
-            if order['current_station'] != parent:
-                return {'success': False, 'message': 'Order is not at the parent station'}
+            if order['current_station'] != parent and order['current_station'] != sub_station_id:
+                return {'success': False, 'message': 'Order is not at the parent station or sub-station'}
 
-            # Get current completed_subs
             completed = set()
             if order.get('completed_subs'):
                 completed = set(float(x) for x in order['completed_subs'].split(',') if x.strip())
@@ -224,16 +400,17 @@ class Database:
             completed.add(sub_station_id)
             completed_str = ','.join(str(s) for s in sorted(completed))
 
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE orders SET completed_subs = ? WHERE id = ?
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+            cursor.execute(f'''
+                UPDATE orders SET completed_subs = {ph} WHERE id = {ph}
             ''', (completed_str, order_id))
 
-            # Log the completion
-            cursor.execute('''
+            now = datetime.now().isoformat()
+            cursor.execute(f'''
                 INSERT INTO station_log (order_id, station_id, entered_at, exited_at, result)
-                VALUES (?, ?, ?, ?, 'SUB_COMPLETED')
-            ''', (order_id, sub_station_id, datetime.now().isoformat(), datetime.now().isoformat()))
+                VALUES ({ph}, {ph}, {ph}, {ph}, 'SUB_COMPLETED')
+            ''', (order_id, sub_station_id, now, now))
 
             conn.commit()
             self.logger.info(f"Order {order_id} completed sub-station {sub_station_id}")
@@ -250,10 +427,9 @@ class Database:
     def init_stations(self, station_config: List[Any]):
         """
         Initialize stations. Accepts either:
-        - List[str] — simple names: ["Station 1", "Station 2", ...]
-        - List[dict] — with sub-stations: [{"name": "X", "subs": ["X 1.1"]}, ...]
+        - List[str] — simple names
+        - List[dict] — with sub-stations
         """
-        # Detect format
         if station_config and isinstance(station_config[0], dict):
             flat = self.flatten_stations(station_config)
         else:
@@ -261,12 +437,10 @@ class Database:
 
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = self._cursor(conn)
             for sid, name in flat:
-                cursor.execute('''
-                    INSERT OR IGNORE INTO stations (id, name, order_id)
-                    VALUES (?, ?, NULL)
-                ''', (sid, name))
+                sql = self._insert_or_ignore('stations', ['id', 'name', 'order_id'], (sid, name, None))
+                cursor.execute(sql, (sid, name, None))
             conn.commit()
             self.logger.info(f"Initialized {len(flat)} station(s): {[f[1] for f in flat]}")
         finally:
@@ -275,24 +449,33 @@ class Database:
     # ── Order creation ──────────────────────────────────────────
 
     def create_order(self, batch: str, product_code: str, color: str, quantity: int) -> List[Dict[str, Any]]:
-        """Create multiple orders. Order numbers are assigned atomically via lastrowid."""
+        """Create multiple orders. Order numbers assigned atomically."""
         created_orders = []
 
         for _ in range(quantity):
             created_at = datetime.now().isoformat()
             conn = self.get_connection()
             try:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO orders (batch, order_number, product_code, color, quantity, status, current_station, created_at)
-                    VALUES (?, '', ?, ?, ?, 'buffer', NULL, ?)
-                ''', (batch, product_code, color, 1, created_at))
+                cursor = self._cursor(conn)
+                ph = self._placeholder()
 
-                order_id = cursor.lastrowid
+                if self.engine == 'postgresql':
+                    cursor.execute(f'''
+                        INSERT INTO orders (batch, order_number, product_code, color, quantity, status, current_station, created_at)
+                        VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, 'buffer', NULL, {ph})
+                        RETURNING id
+                    ''', (batch, '', product_code, color, 1, created_at))
+                else:
+                    cursor.execute(f'''
+                        INSERT INTO orders (batch, order_number, product_code, color, quantity, status, current_station, created_at)
+                        VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, 'buffer', NULL, {ph})
+                    ''', (batch, '', product_code, color, 1, created_at))
+
+                order_id = self._lastrowid(cursor)
                 order_number = f"ORD-{order_id:04d}"
 
-                cursor.execute('''
-                    UPDATE orders SET order_number = ? WHERE id = ?
+                cursor.execute(f'''
+                    UPDATE orders SET order_number = {ph} WHERE id = {ph}
                 ''', (order_number, order_id))
 
                 conn.commit()
@@ -325,9 +508,10 @@ class Database:
         """Get all orders, optionally filtered by status."""
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
             if status:
-                cursor.execute('SELECT * FROM orders WHERE status = ? ORDER BY id DESC', (status,))
+                cursor.execute(f'SELECT * FROM orders WHERE status = {ph} ORDER BY id DESC', (status,))
             else:
                 cursor.execute('SELECT * FROM orders ORDER BY id DESC')
             rows = cursor.fetchall()
@@ -339,8 +523,9 @@ class Database:
         """Get a single order by ID."""
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM orders WHERE id = ?', (order_id,))
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+            cursor.execute(f'SELECT * FROM orders WHERE id = {ph}', (order_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
         finally:
@@ -349,25 +534,36 @@ class Database:
     # ── State transitions ───────────────────────────────────────
 
     def launch_order(self, order_id: int) -> bool:
-        """Launch an order to the first station. Multiple orders can share a station."""
+        """Launch an order to the first station (or first sub-station if exists)."""
         conn = self.get_connection()
         try:
-            first_id = self._station_ids_sorted()[0] if self._station_ids_sorted() else 1.0
-            cursor = conn.cursor()
+            all_ids = self._station_ids_sorted()
+            if not all_ids:
+                return False
+            
+            first_id = all_ids[0]
+            # If first station is a main station with subs, use first sub-station
+            if first_id == int(first_id):
+                subs = self._sub_stations_of(first_id)
+                if subs:
+                    first_id = min(subs)  # First sub-station
+            
+            cursor = self._cursor(conn)
             started_at = datetime.now().isoformat()
+            ph = self._placeholder()
 
-            cursor.execute('''
+            cursor.execute(f'''
                 UPDATE orders
-                SET status = 'production', current_station = ?, started_at = ?, completed_subs = ''
-                WHERE id = ? AND status = 'buffer'
+                SET status = 'production', current_station = {ph}, started_at = {ph}, completed_subs = ''
+                WHERE id = {ph} AND status = 'buffer'
             ''', (first_id, started_at, order_id))
 
             if cursor.rowcount == 0:
                 return False
 
-            cursor.execute('''
+            cursor.execute(f'''
                 INSERT INTO station_log (order_id, station_id, entered_at, result)
-                VALUES (?, ?, ?, 'OK')
+                VALUES ({ph}, {ph}, {ph}, 'OK')
             ''', (order_id, first_id, started_at))
 
             conn.commit()
@@ -381,11 +577,7 @@ class Database:
             conn.close()
 
     def move_order(self, order_id: int) -> Dict[str, Any]:
-        """
-        Move order to the next station.
-        If the current main station has sub-stations, all must be completed first.
-        Returns dict with success bool and optional message.
-        """
+        """Move order to the next station (or first sub-station if exists)."""
         conn = self.get_connection()
         try:
             order = self.get_order(order_id)
@@ -396,7 +588,7 @@ class Database:
             if current_station is None:
                 return {'success': False, 'message': 'Order has no current station'}
 
-            # If on a main station that has sub-stations, check completion
+            # Check sub-stations completion for main stations
             if current_station == math.floor(current_station):
                 subs = self._sub_stations_of(current_station)
                 if subs:
@@ -407,52 +599,57 @@ class Database:
                     if pending:
                         pending_str = ', '.join(str(s) for s in pending)
                         return {'success': False, 'message': f'Сначала завершите подстанции: {pending_str}'}
-                    # All subs completed — skip to next main station
                     all_ids = self._station_ids_sorted()
-                    # Find the next station with integer ID (main station)
                     current_int = int(current_station)
+                    next_station = None
                     for sid in all_ids:
                         if sid > current_station and sid == math.floor(sid):
                             next_station = sid
                             break
-                    else:
-                        next_station = None
                 else:
                     next_station = self._next_station_id(current_station)
             else:
-                # On a sub-station — move to next station in sequence
                 next_station = self._next_station_id(current_station)
 
             if next_station is None:
                 return {'success': False, 'message': 'Order is already at the last station'}
 
-            cursor = conn.cursor()
+            # If next station is a main station with subs, move to first sub-station instead
+            if next_station == int(next_station):
+                next_subs = self._sub_stations_of(next_station)
+                if next_subs:
+                    next_station = min(next_subs)  # First sub-station
 
-            # If moving from a main station with completed subs to next main, clear completed_subs
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+            exited_at = datetime.now().isoformat()
+
             is_main_with_subs = (current_station == math.floor(current_station) and
                                  self._sub_stations_of(current_station) and
                                  order.get('completed_subs'))
             if is_main_with_subs:
-                exited_at = datetime.now().isoformat()
-                cursor.execute('''
+                cursor.execute(f'''
                     UPDATE station_log
-                    SET exited_at = ?, result = 'OK'
-                    WHERE order_id = ? AND station_id = ? AND exited_at IS NULL
+                    SET exited_at = {ph}, result = 'OK'
+                    WHERE order_id = {ph} AND station_id = {ph} AND exited_at IS NULL
                 ''', (exited_at, order_id, current_station))
-                cursor.execute('UPDATE orders SET current_station = ?, completed_subs = ? WHERE id = ?', (next_station, '', order_id))
+                cursor.execute(f'''
+                    UPDATE orders SET current_station = {ph}, completed_subs = {ph} WHERE id = {ph}
+                ''', (next_station, '', order_id))
             else:
-                exited_at = datetime.now().isoformat()
-                cursor.execute('''
+                cursor.execute(f'''
                     UPDATE station_log
-                    SET exited_at = ?, result = 'OK'
-                    WHERE order_id = ? AND station_id = ? AND exited_at IS NULL
+                    SET exited_at = {ph}, result = 'OK'
+                    WHERE order_id = {ph} AND station_id = {ph} AND exited_at IS NULL
                 ''', (exited_at, order_id, current_station))
-                cursor.execute('UPDATE orders SET current_station = ? WHERE id = ?', (next_station, order_id))
+                cursor.execute(f'''
+                    UPDATE orders SET current_station = {ph} WHERE id = {ph}
+                ''', (next_station, order_id))
 
             entered_at = datetime.now().isoformat()
-            cursor.execute('''
+            cursor.execute(f'''
                 INSERT INTO station_log (order_id, station_id, entered_at, result)
-                VALUES (?, ?, ?, 'OK')
+                VALUES ({ph}, {ph}, {ph}, 'OK')
             ''', (order_id, next_station, entered_at))
 
             conn.commit()
@@ -475,19 +672,20 @@ class Database:
 
             completed_at = datetime.now().isoformat()
             current_station = order['current_station']
-            cursor = conn.cursor()
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
 
-            cursor.execute('''
+            cursor.execute(f'''
                 UPDATE orders
-                SET status = 'completed', current_station = NULL, completed_at = ?
-                WHERE id = ?
+                SET status = 'completed', current_station = NULL, completed_at = {ph}
+                WHERE id = {ph}
             ''', (completed_at, order_id))
 
             if current_station:
-                cursor.execute('''
+                cursor.execute(f'''
                     UPDATE station_log
-                    SET exited_at = ?, result = 'OK'
-                    WHERE order_id = ? AND station_id = ? AND exited_at IS NULL
+                    SET exited_at = {ph}, result = 'OK'
+                    WHERE order_id = {ph} AND station_id = {ph} AND exited_at IS NULL
                 ''', (completed_at, order_id, current_station))
 
             conn.commit()
@@ -508,10 +706,11 @@ class Database:
             if not order or order['status'] in ('completed', 'cancelled'):
                 return False
 
-            cursor = conn.cursor()
-            cursor.execute('''
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+            cursor.execute(f'''
                 UPDATE orders SET status = 'cancelled', current_station = NULL
-                WHERE id = ?
+                WHERE id = {ph}
             ''', (order_id,))
 
             conn.commit()
@@ -527,10 +726,11 @@ class Database:
     # ── Queries ─────────────────────────────────────────────────
 
     def get_stations(self) -> List[Dict[str, Any]]:
-        """Get all stations with their current orders (multiple orders per station)."""
+        """Get all stations with their current orders.
+        For main stations (integer IDs), includes orders from both main station and sub-stations."""
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = self._cursor(conn)
             cursor.execute('''
                 SELECT s.id, s.name
                 FROM stations s
@@ -538,13 +738,62 @@ class Database:
             ''')
             stations = [dict(row) for row in cursor.fetchall()]
 
+            ph = self._placeholder()
             for station in stations:
-                cursor.execute('''
-                    SELECT id, order_number, product_code, color, quantity, batch
-                    FROM orders
-                    WHERE current_station = ? AND status = 'production'
-                    ORDER BY id
-                ''', (station['id'],))
+                station_id = station['id']
+                # For main stations (integer IDs), also include orders from sub-stations
+                if station_id == int(station_id):
+                    main_id = int(station_id)
+                    # Main station: find all sub-stations (e.g., 6.0 -> 6.1, 6.2)
+                    # Sub-stations have IDs like 6.1, 6.2, etc. (main_id < id < main_id + 1)
+                    if self.engine == 'postgresql':
+                        cursor.execute('''
+                            SELECT s.id FROM stations s 
+                            WHERE s.id > %s AND s.id < %s
+                            ORDER BY s.id
+                        ''', (float(main_id), float(main_id + 1)))
+                    else:
+                        cursor.execute('''
+                            SELECT s.id FROM stations s 
+                            WHERE s.id > ? AND s.id < ?
+                            ORDER BY s.id
+                        ''', (float(main_id), float(main_id + 1)))
+                    sub_ids = [row['id'] for row in cursor.fetchall()]
+                    
+                    # Build IN clause for main + subs
+                    if sub_ids:
+                        ids = [float(main_id)] + sub_ids
+                        if self.engine == 'postgresql':
+                            placeholders = ','.join(['%s'] * len(ids))
+                            cursor.execute(f'''
+                                SELECT id, order_number, product_code, color, quantity, batch
+                                FROM orders
+                                WHERE current_station IN ({placeholders}) AND status = 'production'
+                                ORDER BY id
+                            ''', ids)
+                        else:
+                            placeholders = ','.join(['?'] * len(ids))
+                            cursor.execute(f'''
+                                SELECT id, order_number, product_code, color, quantity, batch
+                                FROM orders
+                                WHERE current_station IN ({placeholders}) AND status = 'production'
+                                ORDER BY id
+                            ''', ids)
+                    else:
+                        cursor.execute(f'''
+                            SELECT id, order_number, product_code, color, quantity, batch
+                            FROM orders
+                            WHERE current_station = {ph} AND status = 'production'
+                            ORDER BY id
+                        ''', (float(main_id),))
+                else:
+                    # Sub-station: only orders on this exact station
+                    cursor.execute(f'''
+                        SELECT id, order_number, product_code, color, quantity, batch
+                        FROM orders
+                        WHERE current_station = {ph} AND status = 'production'
+                        ORDER BY id
+                    ''', (station_id,))
                 station['orders'] = [dict(row) for row in cursor.fetchall()]
 
             return stations
@@ -555,7 +804,7 @@ class Database:
         """Get production statistics."""
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            cursor = self._cursor(conn)
             cursor.execute('SELECT COUNT(*) as count FROM orders')
             stats = {'total': cursor.fetchone()['count']}
 
@@ -569,5 +818,86 @@ class Database:
             ) if stats['total'] > 0 else 0.0
 
             return stats
+        finally:
+            conn.close()
+
+    # ── QR Scan operations ──────────────────────────────────────
+
+    def save_qr_scan(self, order_id: int, qr_data: str, result: str = 'OK', station_id: float = 6.1) -> Dict[str, Any]:
+        """Save a QR scan result to the database."""
+        conn = self.get_connection()
+        try:
+            order = self.get_order(order_id)
+            if not order:
+                return {'success': False, 'message': 'Order not found'}
+
+            if order['status'] != 'production':
+                return {'success': False, 'message': 'Order is not in production'}
+
+            if order['current_station'] != station_id:
+                return {'success': False, 'message': f'Order is not at station {station_id}'}
+
+            now = datetime.now().isoformat()
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+
+            if self.engine == 'postgresql':
+                cursor.execute(f'''
+                    INSERT INTO qr_scans (order_id, station_id, qr_data, result, scanned_at, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                ''', (order_id, station_id, qr_data, result, now, now))
+                scan_id = cursor.fetchone()['id']
+            else:
+                cursor.execute('''
+                    INSERT INTO qr_scans (order_id, station_id, qr_data, result, scanned_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (order_id, station_id, qr_data, result, now, now))
+                scan_id = cursor.lastrowid
+
+            conn.commit()
+            self.logger.info(f"QR scan saved: order_id={order_id}, qr_data={qr_data}, scan_id={scan_id}")
+            return {'success': True, 'scan_id': scan_id, 'message': 'QR scan saved successfully'}
+        except Exception as e:
+            self.logger.error(f"save_qr_scan({order_id}, {qr_data}) failed: {e}", exc_info=True)
+            conn.rollback()
+            return {'success': False, 'message': str(e)}
+        finally:
+            conn.close()
+
+    def get_qr_scans(self, order_id: Optional[int] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get QR scans, optionally filtered by order_id."""
+        conn = self.get_connection()
+        try:
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+
+            if order_id:
+                cursor.execute(f'''
+                    SELECT * FROM qr_scans WHERE order_id = {ph}
+                    ORDER BY scanned_at DESC
+                    LIMIT {ph}
+                ''', (order_id, limit))
+            else:
+                cursor.execute(f'''
+                    SELECT * FROM qr_scans
+                    ORDER BY scanned_at DESC
+                    LIMIT {ph}
+                ''', (limit,))
+
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_qr_scan(self, scan_id: int) -> Optional[Dict[str, Any]]:
+        """Get a single QR scan by ID."""
+        conn = self.get_connection()
+        try:
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+            cursor.execute(f'SELECT * FROM qr_scans WHERE id = {ph}', (scan_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
         finally:
             conn.close()

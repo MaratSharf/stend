@@ -5,6 +5,7 @@ from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # Role hierarchy — higher number = more permissions
+# Note: Custom roles (like 'oper', 'viewer_only') are checked dynamically via role_permissions table
 ROLES = {
     'viewer': 1,
     'operator': 2,
@@ -15,6 +16,8 @@ ROLE_LABELS = {
     'viewer': 'Наблюдатель',
     'operator': 'Оператор',
     'admin': 'Администратор',
+    'oper': 'Оператор (alt)',  # Alternative operator account
+    'viewer_only': 'Только просмотр',  # Read-only role
 }
 
 
