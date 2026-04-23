@@ -1,12 +1,19 @@
 #!/usr/bin/env python
 """
-Тест новой логики: при перемещении на основную станцию заказ автоматически попадает на подстанцию
+Тест новой логики: при перемещении на основную станцию заказ автоматически попадает на подстанцию - PostgreSQL версия
 """
 from utils.db_connection import DBConnection
+from config import load_config
 
 def test_move_to_station_6():
     """Тест: перемещение заказа на станцию 6.0 должно перенаправить на 6.1"""
-    db = DBConnection('data/mes.db')
+    try:
+        config = load_config()
+        db = DBConnection(config['database'])
+    except Exception:
+        print("Ошибка загрузки конфигурации. Используйте PostgreSQL конфигурацию в config.yaml")
+        exit(1)
+    
     conn = db.get_connection()
     cur = db.cursor(conn)
     

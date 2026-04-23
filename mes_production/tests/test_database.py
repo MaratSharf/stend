@@ -9,15 +9,11 @@ class TestDatabaseInit:
     def test_creates_tables(self, db):
         conn = db.get_connection()
         cursor = db._cursor(conn)
-        if db.engine == 'postgresql':
-            cursor.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = 'public' ORDER BY table_name"
-            )
-            tables = [row['table_name'] for row in cursor.fetchall()]
-        else:
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-            tables = [row['name'] for row in cursor.fetchall()]
+        cursor.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'public' ORDER BY table_name"
+        )
+        tables = [row['table_name'] for row in cursor.fetchall()]
         conn.close()
 
         assert 'orders' in tables
@@ -36,14 +32,14 @@ class TestOrderNumberFormat:
     def test_format_matches_ord_pattern(self, controller):
         result = controller.create_order("TEST", "PROD-X", "Black", 1)
         order_number = result['orders'][0]['order_number']
-        assert re.match(r'^ORD-\d{4,}$', order_number), f"Invalid format: {order_number}"
+        assert re.match(r'^ORD-\d{4,}, order_number), f"Invalid format: {order_number}"
 
     def test_multiple_orders_have_sequential_numbers(self, controller):
         result = controller.create_order("BATCH-TEST", "PROD-X", "Black", 5)
         orders = result['orders']
         numbers = [o['order_number'] for o in orders]
         # Sequential numbers should increment
-        assert all(re.match(r'^ORD-\d{4,}$', n) for n in numbers)
+        assert all(re.match(r'^ORD-\d{4,}, n) for n in numbers)
         for i in range(1, len(numbers)):
             prev_id = int(numbers[i - 1].split('-')[1])
             curr_id = int(numbers[i].split('-')[1])
@@ -62,7 +58,7 @@ class TestCreateOrder:
             assert order['quantity'] == 1
             assert order['status'] == 'buffer'
             assert order['current_station'] is None
-            assert re.match(r'^ORD-\d{4,}$', order['order_number'])
+            assert re.match(r'^ORD-\d{4,}, order['order_number'])
 
     def test_single_order_creation(self, controller):
         result = controller.create_order("BATCH-B", "PROD-2", "Blue", 1)

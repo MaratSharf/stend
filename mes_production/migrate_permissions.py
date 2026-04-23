@@ -1,14 +1,10 @@
 """
-Script to migrate role_permissions in users.db with new screen-based permissions.
+Script to migrate role_permissions in users.db with new screen-based permissions - PostgreSQL version.
 Run this once after updating permissions.py to reset built-in roles.
 """
-import sqlite3
 import sys
 import os
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
+from utils.db_connection import DBConnection
 from utils.permissions import DEFAULT_ROLE_PERMISSIONS, PERMISSIONS
 
 
@@ -20,19 +16,28 @@ def migrate_user_db(db_path: str = 'data/users.db') -> None:
         print("Error: Database path not provided")
         sys.exit(1)
     
-    conn = sqlite3.connect(db_path)
+    # Use config if available, otherwise direct path
     try:
-        cursor = conn.cursor()
+        from config import load_config
+        config = load_config()
+        db = DBConnection(config['database'])
+    except:
+        db = DBConnection(db_path)
+    
+    conn = db.get_connection()
+    try:
+        cursor = db.cursor(conn)
+        ph = db.placeholder()
         
-        # Check if tables exist
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='role_permissions'")
-        if not cursor.fetchone():
+        # Check if tables exist (PostgreSQL version)
+        cursor.execute("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'role_permissions')")
+        if not cursor.fetchone()['exists']:
             print("Table 'role_permissions' not found. Skipping migration.")
             return
         
         # Get all existing roles
         cursor.execute("SELECT DISTINCT role FROM role_permissions ORDER BY role")
-        existing_roles = [row[0] for row in cursor.fetchall()]
+        existing_roles = [row['role'] for row in cursor.fetchall()]
         print(f"Found roles: {existing_roles}")
         
         # Reset built-in roles to new defaults
@@ -43,7 +48,7 @@ def migrate_user_db(db_path: str = 'data/users.db') -> None:
                 print(f"\nResetting role '{role}' to new defaults...")
                 
                 # Delete existing permissions
-                cursor.execute("DELETE FROM role_permissions WHERE role = ?", (role,))
+                cursor.execute(f"DELETE FROM role_permissions WHERE role = {ph}", (role,))
                 
                 # Get new defaults
                 new_perms = DEFAULT_ROLE_PERMISSIONS.get(role, [])
@@ -53,7 +58,7 @@ def migrate_user_db(db_path: str = 'data/users.db') -> None:
                 for perm in new_perms:
                     if perm in PERMISSIONS:
                         cursor.execute(
-                            "INSERT INTO role_permissions (role, permission) VALUES (?, ?)",
+                            f"INSERT INTO role_permissions (role, permission) VALUES ({ph}, {ph})",
                             (role, perm)
                         )
                     else:
@@ -69,15 +74,15 @@ def migrate_user_db(db_path: str = 'data/users.db') -> None:
         print("Verification:")
         for role in built_in_roles:
             cursor.execute(
-                "SELECT permission FROM role_permissions WHERE role = ? AND permission != '' ORDER BY permission",
+                f"SELECT permission FROM role_permissions WHERE role = {ph} AND permission != '' ORDER BY permission",
                 (role,)
             )
-            perms = [row[0] for row in cursor.fetchall()]
+            perms = [row['permission'] for row in cursor.fetchall()]
             print(f"  {role}: {len(perms)} permission(s) - {perms[:5]}{'...' if len(perms) > 5 else ''}")
         
         print("\nMigration completed successfully!")
         
-    except sqlite3.Error as e:
+    except Exception as e:
         print(f"Database error: {e}")
         conn.rollback()
         sys.exit(1)

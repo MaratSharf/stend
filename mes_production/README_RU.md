@@ -32,7 +32,7 @@
 | Язык | Python 3.10+ |
 | Веб-фреймворк | Flask >= 3.0.0 |
 | Сервер | Waitress >= 3.0.0 |
-| База данных | SQLite (FK включены, транзакции с rollback) |
+| База данных | PostgreSQL (psycopg2-binary) |
 | Конфигурация | YAML (PyYAML >= 6.0) |
 | Фронтенд | HTML/CSS/JavaScript (тёмная/светлая тема) |
 | Тесты | pytest >= 8.0, pytest-cov >= 5.0 |

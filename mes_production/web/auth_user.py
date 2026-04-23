@@ -11,7 +11,6 @@ Provides:
   - CSRF token generation/validation
   - init_default_users() — creates admin if no users exist
 """
-import sqlite3
 import functools
 import hashlib
 import os

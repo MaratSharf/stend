@@ -1,7 +1,7 @@
 """
 MES Production System - Role Service
 Централизованный сервис для управления ролями и правами доступа.
-Поддерживает SQLite и PostgreSQL.
+Использует PostgreSQL.
 """
 import json
 from datetime import datetime

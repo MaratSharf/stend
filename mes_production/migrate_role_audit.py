@@ -1,14 +1,12 @@
 """
-MES Production System - Migration for Role Audit Log
+MES Production System - Migration for Role Audit Log (PostgreSQL version)
 Добавляет таблицу для аудита изменений ролей.
 Запуск: python migrate_role_audit.py
 """
-import sqlite3
 import os
 import sys
-
-# Добавить родительскую директорию в path для импортов
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.db_connection import DBConnection
+from config import load_config
 
 
 def migrate(db_path: str):
@@ -20,15 +18,26 @@ def migrate(db_path: str):
         print(f"❌ Файл БД не найден: {db_path}")
         return False
     
-    conn = sqlite3.connect(db_path)
+    # Use config if available, otherwise direct path
     try:
-        cursor = conn.cursor()
+        config = load_config()
+        db = DBConnection(config['database'])
+    except:
+        db = DBConnection(db_path)
+    
+    conn = db.get_connection()
+    try:
+        cursor = db.cursor(conn)
+        ph = db.placeholder()
         
-        # Проверка существования таблицы
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='role_audit_log'"
-        )
-        if cursor.fetchone():
+        # Проверка существования таблицы (PostgreSQL)
+        cursor.execute("""
+            SELECT EXISTS(
+                SELECT 1 FROM information_schema.tables 
+                WHERE table_name = 'role_audit_log'
+            )
+        """)
+        if cursor.fetchone()['exists']:
             print("ℹ️  Таблица role_audit_log уже существует")
             return True
         
@@ -36,15 +45,14 @@ def migrate(db_path: str):
         print("📝 Создание таблицы role_audit_log...")
         cursor.execute('''
             CREATE TABLE role_audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                role_id TEXT NOT NULL,           -- Имя роли (используем TEXT для совместимости)
-                action TEXT NOT NULL,            -- 'created', 'updated', 'deleted', 
-                                                  -- 'permission_added', 'permission_removed'
-                old_value TEXT,                  -- JSON со старыми значениями
-                new_value TEXT,                  -- JSON с новыми значениями
-                changed_by INTEGER,              -- ID пользователя
-                changed_at TEXT NOT NULL,        -- ISO timestamp
-                ip_address TEXT,                 -- IP адрес
+                id SERIAL PRIMARY KEY,
+                role_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                changed_by INTEGER,
+                changed_at TEXT NOT NULL,
+                ip_address TEXT,
                 FOREIGN KEY (changed_by) REFERENCES users(id)
             )
         ''')
@@ -76,17 +84,7 @@ def migrate(db_path: str):
 
 if __name__ == '__main__':
     # Определить путь к БД пользователей
-    from flask import Flask
-    
-    # Попытка загрузить конфиг из приложения
     try:
-        # Импортировать функцию создания приложения если доступна
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "app_module", 
-            os.path.join(os.path.dirname(__file__), 'web', 'app.py')
-        )
-        # Для простоты используем стандартный путь
         db_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             'data',

@@ -1,22 +1,32 @@
+```
 """
-Script to delete test roles from users.db
+Script to delete test roles from users.db - PostgreSQL version.
 """
-import sqlite3
 import sys
 import os
+from utils.db_connection import DBConnection
+from config import load_config
 
 
 def delete_test_roles(db_path: str = 'data/users.db') -> None:
     """Delete test roles from role_permissions table."""
     print(f"Connecting to {db_path}...")
     
-    conn = sqlite3.connect(db_path)
+    # Use config if available, otherwise direct path
     try:
-        cursor = conn.cursor()
+        config = load_config()
+        db = DBConnection(config['database'])
+    except:
+        db = DBConnection(db_path)
+    
+    conn = db.get_connection()
+    try:
+        cursor = db.cursor(conn)
+        ph = db.placeholder()
         
         # Get all roles
         cursor.execute("SELECT DISTINCT role FROM role_permissions ORDER BY role")
-        all_roles = [row[0] for row in cursor.fetchall()]
+        all_roles = [row['role'] for row in cursor.fetchall()]
         print(f"Current roles: {all_roles}")
         
         # Built-in roles to keep
@@ -39,18 +49,18 @@ def delete_test_roles(db_path: str = 'data/users.db') -> None:
         
         # Delete test roles
         for role in test_roles:
-            cursor.execute("DELETE FROM role_permissions WHERE role = ?", (role,))
+            cursor.execute(f"DELETE FROM role_permissions WHERE role = {ph}", (role,))
             print(f"  Deleted role: {role}")
         
         conn.commit()
         
         # Verify
         cursor.execute("SELECT DISTINCT role FROM role_permissions ORDER BY role")
-        remaining = [row[0] for row in cursor.fetchall()]
+        remaining = [row['role'] for row in cursor.fetchall()]
         print(f"\nRemaining roles: {remaining}")
         print("Done!")
         
-    except sqlite3.Error as e:
+    except Exception as e:
         print(f"Database error: {e}")
         conn.rollback()
         sys.exit(1)
@@ -65,3 +75,4 @@ if __name__ == '__main__':
         db_path = sys.argv[1]
     
     delete_test_roles(db_path)
+```

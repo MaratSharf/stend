@@ -39,21 +39,19 @@ def create_app(config: dict = None) -> Flask:
 
     # ── Initialize database ────────────────────────────────────
     db_config = config.get('database', {})
-    # Support legacy SQLite path OR new PostgreSQL config
-    if 'engine' in db_config and db_config['engine'] == 'postgresql':
-        db_conn = db_config
-        user_db_conn = {
-            'engine': 'postgresql',
-            'host': db_config.get('host', 'localhost'),
-            'port': db_config.get('port', 5432),
-            'name': db_config.get('name', 'mes_production'),
-            'user': db_config.get('user', 'mes_user'),
-            'password': db_config.get('password', 'mes_password'),
-        }
-    else:
-        db_path = db_config.get('path', 'data/mes.db')
-        db_conn = db_path
-        user_db_conn = os.path.join(os.path.dirname(db_path), 'users.db')
+    
+    if db_config.get('engine') != 'postgresql':
+        raise RuntimeError("Only PostgreSQL database engine is supported")
+    
+    db_conn = db_config
+    user_db_conn = {
+        'engine': 'postgresql',
+        'host': db_config.get('host', 'localhost'),
+        'port': db_config.get('port', 5432),
+        'name': db_config.get('name', 'mes_production'),
+        'user': db_config.get('user', 'mes_user'),
+        'password': db_config.get('password', 'mes_password'),
+    }
 
     # Setup logger (needed by both Database and web layer)
     log_config = config.get('logging', {})
@@ -70,12 +68,8 @@ def create_app(config: dict = None) -> Flask:
     controller = Controller(db)
 
     # ── Initialize user authentication ─────────────────────────
-    if isinstance(user_db_conn, dict):
-        app.config['user_db_conn'] = user_db_conn
-        app.config['user_db_path'] = None
-    else:
-        app.config['user_db_path'] = user_db_conn
-        app.config['user_db_conn'] = None
+    app.config['user_db_conn'] = user_db_conn
+    app.config['user_db_path'] = None
     init_default_users(user_db_conn)
 
     # Init Flask-Login
@@ -213,42 +207,23 @@ def create_app(config: dict = None) -> Flask:
                 flash('Пароли не совпадают', 'error')
             else:
                 user_db_conn = app.config.get('user_db_conn')
-                user_db_path = app.config.get('user_db_path')
                 
-                # Determine connection method based on config
-                if user_db_conn and isinstance(user_db_conn, dict):
-                    # PostgreSQL
-                    from utils.db_connection import DBConnection
-                    db_conn = DBConnection(user_db_conn)
-                    conn = db_conn.get_connection()
-                    try:
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            'UPDATE users SET password_hash = %s, password_changed = %s WHERE id = %s',
-                            (generate_password_hash(new_pw), 1, current_user.id)
-                        )
-                        conn.commit()
-                        logger.info(f"User '{current_user.username}' changed password")
-                        flash('Пароль успешно изменён', 'success')
-                        return redirect(url_for('index'))
-                    finally:
-                        conn.close()
-                else:
-                    # SQLite
-                    import sqlite3
-                    conn = sqlite3.connect(user_db_path)
-                    try:
-                        cursor = conn.cursor()
-                        cursor.execute('''
-                            UPDATE users SET password_hash = ?, password_changed = 1
-                            WHERE id = ?
-                        ''', (generate_password_hash(new_pw), current_user.id))
-                        conn.commit()
-                        logger.info(f"User '{current_user.username}' changed password")
-                        flash('Пароль успешно изменён', 'success')
-                        return redirect(url_for('index'))
-                    finally:
-                        conn.close()
+                # PostgreSQL only
+                from utils.db_connection import DBConnection
+                db_conn = DBConnection(user_db_conn)
+                conn = db_conn.get_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        'UPDATE users SET password_hash = %s, password_changed = %s WHERE id = %s',
+                        (generate_password_hash(new_pw), 1, current_user.id)
+                    )
+                    conn.commit()
+                    logger.info(f"User '{current_user.username}' changed password")
+                    flash('Пароль успешно изменён', 'success')
+                    return redirect(url_for('index'))
+                finally:
+                    conn.close()
 
         return render_template('change_password.html')
 
@@ -266,32 +241,17 @@ def create_app(config: dict = None) -> Flask:
     @require_permission('user_view')
     def users_page():
         """User management page: list/create/edit users (requires manage_users permission for write operations)."""
-        db_path = app.config.get('user_db_path')
         user_db_conn = app.config.get('user_db_conn')
         
-        # Determine connection method based on config
-        if user_db_conn and isinstance(user_db_conn, dict):
-            # PostgreSQL
-            from utils.db_connection import DBConnection
-            db_conn = DBConnection(user_db_conn)
-            conn = db_conn.get_connection()
-            try:
-                cursor = conn.cursor()
-                cursor.execute('SELECT * FROM users ORDER BY id')
-                users = [dict(zip([desc[0] for desc in cursor.description], row)) for row in cursor.fetchall()]
-            finally:
-                conn.close()
-        else:
-            # SQLite
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            try:
-                cursor = conn.cursor()
-                cursor.execute('SELECT * FROM users ORDER BY id')
-                users = [dict(r) for r in cursor.fetchall()]
-            finally:
-                conn.close()
+        from utils.db_connection import DBConnection
+        db_conn = DBConnection(user_db_conn)
+        conn = db_conn.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM users ORDER BY id')
+            users = [dict(zip([desc[0] for desc in cursor.description], row)) for row in cursor.fetchall()]
+        finally:
+            conn.close()
 
         return render_template('users.html', users=users, roles=ROLES, user=current_user)
 
@@ -305,91 +265,47 @@ def create_app(config: dict = None) -> Flask:
             return jsonify({'error': 'username and password required'}), 400
 
         role = data.get('role', 'viewer')
-        db_path = app.config.get('user_db_path')
         user_db_conn = app.config.get('user_db_conn')
         
-        # Determine connection method based on config
-        if user_db_conn and isinstance(user_db_conn, dict):
-            # PostgreSQL
-            import psycopg2
-            from utils.db_connection import DBConnection
-            db_conn = DBConnection(user_db_conn)
-            conn = db_conn.get_connection()
-            try:
-                cursor = conn.cursor()
-                # Check in role_permissions table
-                cursor.execute('SELECT 1 FROM role_permissions WHERE role = %s LIMIT 1', (role,))
-                role_in_perms = cursor.fetchone() is not None
-                # Check in users table (role assigned to existing users)
-                cursor.execute('SELECT 1 FROM users WHERE role = %s LIMIT 1', (role,))
-                role_in_users = cursor.fetchone() is not None
-                role_exists = role_in_perms or role_in_users
-                
-                # If role doesn't exist and it's not a built-in role, offer to create it with defaults
-                if not role_exists and role not in ROLES:
-                    conn.close()
-                    return jsonify({
-                        'error': f'Role "{role}" does not exist',
-                        'suggestion': 'You can create this role first via the Roles management page'
-                    }), 400
-                
-                # Create user
-                password_hash = generate_password_hash(data['password'])
-                from datetime import datetime
-                cursor.execute(
-                    'INSERT INTO users (username, password_hash, role, created_at) VALUES (%s, %s, %s, %s) RETURNING id',
-                    (data['username'].strip(), password_hash, role, datetime.now().isoformat())
-                )
-                conn.commit()
-                new_id = cursor.fetchone()[0]
-                logger.info(f"User '{data['username']}' created with role '{role}' by '{current_user.username}'")
-                return jsonify({'success': True, 'id': new_id, 'role': role})
-            except psycopg2.IntegrityError:
-                conn.rollback()
-                return jsonify({'error': 'Username already exists'}), 400
-            finally:
+        # PostgreSQL only
+        import psycopg2
+        from utils.db_connection import DBConnection
+        db_conn = DBConnection(user_db_conn)
+        conn = db_conn.get_connection()
+        try:
+            cursor = conn.cursor()
+            # Check in role_permissions table
+            cursor.execute('SELECT 1 FROM role_permissions WHERE role = %s LIMIT 1', (role,))
+            role_in_perms = cursor.fetchone() is not None
+            # Check in users table (role assigned to existing users)
+            cursor.execute('SELECT 1 FROM users WHERE role = %s LIMIT 1', (role,))
+            role_in_users = cursor.fetchone() is not None
+            role_exists = role_in_perms or role_in_users
+            
+            # If role doesn't exist and it's not a built-in role, offer to create it with defaults
+            if not role_exists and role not in ROLES:
                 conn.close()
-        else:
-            # SQLite
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            try:
-                cursor = conn.cursor()
-                # Check in role_permissions table
-                cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
-                role_in_perms = cursor.fetchone() is not None
-                # Check in users table (role assigned to existing users)
-                cursor.execute('SELECT 1 FROM users WHERE role = ? LIMIT 1', (role,))
-                role_in_users = cursor.fetchone() is not None
-                role_exists = role_in_perms or role_in_users
-                
-                # If role doesn't exist and it's not a built-in role, offer to create it with defaults
-                if not role_exists and role not in ROLES:
-                    conn.close()
-                    return jsonify({
-                        'error': f'Role "{role}" does not exist',
-                        'suggestion': 'You can create this role first via the Roles management page'
-                    }), 400
-            finally:
-                conn.close()
-
-            conn = sqlite3.connect(db_path)
-            try:
-                cursor = conn.cursor()
-                password_hash = generate_password_hash(data['password'])
-                from datetime import datetime
-                cursor.execute('''
-                    INSERT INTO users (username, password_hash, role, created_at)
-                    VALUES (?, ?, ?, ?)
-                ''', (data['username'].strip(), password_hash, role, datetime.now().isoformat()))
-                conn.commit()
-                logger.info(f"User '{data['username']}' created with role '{role}' by '{current_user.username}'")
-                return jsonify({'success': True, 'id': cursor.lastrowid, 'role': role})
-            except sqlite3.IntegrityError:
-                return jsonify({'error': 'Username already exists'}), 400
-            finally:
-                conn.close()
+                return jsonify({
+                    'error': f'Role "{role}" does not exist',
+                    'suggestion': 'You can create this role first via the Roles management page'
+                }), 400
+            
+            # Create user
+            password_hash = generate_password_hash(data['password'])
+            from datetime import datetime
+            cursor.execute(
+                'INSERT INTO users (username, password_hash, role, created_at) VALUES (%s, %s, %s, %s) RETURNING id',
+                (data['username'].strip(), password_hash, role, datetime.now().isoformat())
+            )
+            conn.commit()
+            new_id = cursor.fetchone()[0]
+            logger.info(f"User '{data['username']}' created with role '{role}' by '{current_user.username}'")
+            return jsonify({'success': True, 'id': new_id, 'role': role})
+        except psycopg2.IntegrityError:
+            conn.rollback()
+            return jsonify({'error': 'Username already exists'}), 400
+        finally:
+            conn.close()
 
     @app.route('/api/users/<int:user_id>', methods=['POST'])
     @login_required
@@ -397,74 +313,40 @@ def create_app(config: dict = None) -> Flask:
     def api_update_user(user_id: int):
         """Update user with role validation."""
         data = request.get_json()
-        db_path = app.config.get('user_db_path')
         user_db_conn = app.config.get('user_db_conn')
         
-        # Determine connection method based on config
-        if user_db_conn and isinstance(user_db_conn, dict):
-            # PostgreSQL
-            import psycopg2
-            from utils.db_connection import DBConnection
-            db_conn = DBConnection(user_db_conn)
-            conn = db_conn.get_connection()
-            try:
-                cursor = conn.cursor()
+        # PostgreSQL only
+        import psycopg2
+        from utils.db_connection import DBConnection
+        db_conn = DBConnection(user_db_conn)
+        conn = db_conn.get_connection()
+        try:
+            cursor = conn.cursor()
 
-                # Get all valid roles from database and ROLES dict
-                cursor.execute('SELECT DISTINCT role FROM role_permissions')
-                db_roles = {r[0] for r in cursor.fetchall()}
-                valid_roles = db_roles.union(set(ROLES.keys()))
+            # Get all valid roles from database and ROLES dict
+            cursor.execute('SELECT DISTINCT role FROM role_permissions')
+            db_roles = {r[0] for r in cursor.fetchall()}
+            valid_roles = db_roles.union(set(ROLES.keys()))
+            
+            # Handle role update with validation
+            if 'role' in data:
+                new_role = data['role']
+                if new_role not in valid_roles:
+                    return jsonify({'error': f'Invalid role "{new_role}". Available roles: {", ".join(sorted(valid_roles))}'}), 400
+                cursor.execute('UPDATE users SET role = %s WHERE id = %s', (new_role, user_id))
                 
-                # Handle role update with validation
-                if 'role' in data:
-                    new_role = data['role']
-                    if new_role not in valid_roles:
-                        return jsonify({'error': f'Invalid role "{new_role}". Available roles: {", ".join(sorted(valid_roles))}'}), 400
-                    cursor.execute('UPDATE users SET role = %s WHERE id = %s', (new_role, user_id))
-                    
-                if 'password' in data and data['password']:
-                    cursor.execute('UPDATE users SET password_hash = %s WHERE id = %s',
-                                   (generate_password_hash(data['password']), user_id))
-                if 'is_active' in data:
-                    cursor.execute('UPDATE users SET is_active = %s WHERE id = %s',
-                                   (1 if data['is_active'] else 0, user_id))
+            if 'password' in data and data['password']:
+                cursor.execute('UPDATE users SET password_hash = %s WHERE id = %s',
+                               (generate_password_hash(data['password']), user_id))
+            if 'is_active' in data:
+                cursor.execute('UPDATE users SET is_active = %s WHERE id = %s',
+                               (1 if data['is_active'] else 0, user_id))
 
-                conn.commit()
-                logger.info(f"User {user_id} updated by '{current_user.username}'")
-                return jsonify({'success': True})
-            finally:
-                conn.close()
-        else:
-            # SQLite
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            try:
-                cursor = conn.cursor()
-
-                # Get all valid roles from database and ROLES dict
-                cursor.execute('SELECT DISTINCT role FROM role_permissions')
-                db_roles = {r[0] for r in cursor.fetchall()}
-                valid_roles = db_roles.union(set(ROLES.keys()))
-                
-                # Handle role update with validation
-                if 'role' in data:
-                    new_role = data['role']
-                    if new_role not in valid_roles:
-                        return jsonify({'error': f'Invalid role "{new_role}". Available roles: {", ".join(sorted(valid_roles))}'}), 400
-                    cursor.execute('UPDATE users SET role = ? WHERE id = ?', (new_role, user_id))
-                    
-                if 'password' in data and data['password']:
-                    cursor.execute('UPDATE users SET password_hash = ? WHERE id = ?',
-                                   (generate_password_hash(data['password']), user_id))
-                if 'is_active' in data:
-                    cursor.execute('UPDATE users SET is_active = ? WHERE id = ?',
-                                   (1 if data['is_active'] else 0, user_id))
-
-                conn.commit()
-                logger.info(f"User {user_id} updated by '{current_user.username}'")
-                return jsonify({'success': True})
-            finally:
-                conn.close()
+            conn.commit()
+            logger.info(f"User {user_id} updated by '{current_user.username}'")
+            return jsonify({'success': True})
+        finally:
+            conn.close()
 
     @app.route('/api/users/<int:user_id>', methods=['DELETE'])
     @login_required
@@ -473,36 +355,21 @@ def create_app(config: dict = None) -> Flask:
         if user_id == current_user.id:
             return jsonify({'error': 'Cannot delete yourself'}), 400
 
-        db_path = app.config.get('user_db_path')
         user_db_conn = app.config.get('user_db_conn')
         
-        # Determine connection method based on config
-        if user_db_conn and isinstance(user_db_conn, dict):
-            # PostgreSQL
-            import psycopg2
-            from utils.db_connection import DBConnection
-            db_conn = DBConnection(user_db_conn)
-            conn = db_conn.get_connection()
-            try:
-                cursor = conn.cursor()
-                cursor.execute('DELETE FROM users WHERE id = %s', (user_id,))
-                conn.commit()
-                logger.info(f"User {user_id} deleted by '{current_user.username}'")
-                return jsonify({'success': True})
-            finally:
-                conn.close()
-        else:
-            # SQLite
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            try:
-                cursor = conn.cursor()
-                cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
-                conn.commit()
-                logger.info(f"User {user_id} deleted by '{current_user.username}'")
-                return jsonify({'success': True})
-            finally:
-                conn.close()
+        # PostgreSQL only
+        import psycopg2
+        from utils.db_connection import DBConnection
+        db_conn = DBConnection(user_db_conn)
+        conn = db_conn.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM users WHERE id = %s', (user_id,))
+            conn.commit()
+            logger.info(f"User {user_id} deleted by '{current_user.username}'")
+            return jsonify({'success': True})
+        finally:
+            conn.close()
 
     # ── Page routes ────────────────────────────────────────────
 
@@ -544,64 +411,34 @@ def create_app(config: dict = None) -> Flask:
             CATEGORIES, PERMISSIONS, SCREENS
         )
         
-        db_path = app.config.get('user_db_path')
         user_db_conn = app.config.get('user_db_conn')
         
-        # Determine connection method based on config
-        if user_db_conn and isinstance(user_db_conn, dict):
-            # PostgreSQL
-            from utils.db_connection import DBConnection
-            db_conn = DBConnection(user_db_conn)
-            conn = db_conn.get_connection()
-            try:
-                cursor = conn.cursor()
-                
-                # Get ALL roles from database (including custom roles)
-                cursor.execute('SELECT DISTINCT role FROM role_permissions ORDER BY role')
-                all_roles_db = [r[0] for r in cursor.fetchall()]
-                
-                # Get all permissions for each role
-                role_permissions = {}
-                for role in all_roles_db:
-                    cursor.execute('''
-                        SELECT permission FROM role_permissions WHERE role = %s AND permission != ''
-                    ''', (role,))
-                    role_permissions[role] = [r[0] for r in cursor.fetchall()]
-                
-                # Build roles dict: include built-in roles with labels + custom roles
-                roles_dict = dict(ROLE_LABELS)  # Copy built-in roles
-                for role in all_roles_db:
-                    if role not in roles_dict:
-                        roles_dict[role] = role.capitalize()  # Custom role label
-            finally:
-                conn.close()
-        else:
-            # SQLite
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            try:
-                cursor = conn.cursor()
-                
-                # Get ALL roles from database (including custom roles)
-                cursor.execute('SELECT DISTINCT role FROM role_permissions ORDER BY role')
-                all_roles_db = [r['role'] for r in cursor.fetchall()]
-                
-                # Get all permissions for each role
-                role_permissions = {}
-                for role in all_roles_db:
-                    cursor.execute('''
-                        SELECT permission FROM role_permissions WHERE role = ? AND permission != ''
-                    ''', (role,))
-                    role_permissions[role] = [r['permission'] for r in cursor.fetchall()]
-                
-                # Build roles dict: include built-in roles with labels + custom roles
-                roles_dict = dict(ROLE_LABELS)  # Copy built-in roles
-                for role in all_roles_db:
-                    if role not in roles_dict:
-                        roles_dict[role] = role.capitalize()  # Custom role label
-            finally:
-                conn.close()
+        # PostgreSQL only
+        from utils.db_connection import DBConnection
+        db_conn = DBConnection(user_db_conn)
+        conn = db_conn.get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Get ALL roles from database (including custom roles)
+            cursor.execute('SELECT DISTINCT role FROM role_permissions ORDER BY role')
+            all_roles_db = [r[0] for r in cursor.fetchall()]
+            
+            # Get all permissions for each role
+            role_permissions = {}
+            for role in all_roles_db:
+                cursor.execute('''
+                    SELECT permission FROM role_permissions WHERE role = %s AND permission != ''
+                ''', (role,))
+                role_permissions[role] = [r[0] for r in cursor.fetchall()]
+            
+            # Build roles dict: include built-in roles with labels + custom roles
+            roles_dict = dict(ROLE_LABELS)  # Copy built-in roles
+            for role in all_roles_db:
+                if role not in roles_dict:
+                    roles_dict[role] = role.capitalize()  # Custom role label
+        finally:
+            conn.close()
         
         categories = get_permission_categories()
         permissions_by_category = {cat: get_permissions_by_category(cat) for cat in categories}
@@ -625,47 +462,26 @@ def create_app(config: dict = None) -> Flask:
     @require_permission('manage_roles')
     def api_set_role_permissions(role: str):
         """Set permissions for a specific role with automatic role creation if needed."""
-        db_path = app.config.get('user_db_path')
         user_db_conn = app.config.get('user_db_conn')
         
-        # Determine connection method based on config
-        if user_db_conn and isinstance(user_db_conn, dict):
-            # PostgreSQL
-            import psycopg2
-            from utils.db_connection import DBConnection
-            db_conn = DBConnection(user_db_conn)
-            conn = db_conn.get_connection()
-            try:
-                cursor = conn.cursor()
-                # Check if role exists in role_permissions table OR is a built-in role
-                cursor.execute('SELECT 1 FROM role_permissions WHERE role = %s LIMIT 1', (role,))
-                role_in_perms = cursor.fetchone() is not None
-                
-                # Also check if role is assigned to any user
-                cursor.execute('SELECT 1 FROM users WHERE role = %s LIMIT 1', (role,))
-                role_in_users = cursor.fetchone() is not None
-                
-                role_exists = role_in_perms or role_in_users
-            finally:
-                conn.close()
-        else:
-            # SQLite
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            try:
-                cursor = conn.cursor()
-                # Check if role exists in role_permissions table OR is a built-in role
-                cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
-                role_in_perms = cursor.fetchone() is not None
-                
-                # Also check if role is assigned to any user
-                cursor.execute('SELECT 1 FROM users WHERE role = ? LIMIT 1', (role,))
-                role_in_users = cursor.fetchone() is not None
-                
-                role_exists = role_in_perms or role_in_users
-            finally:
-                conn.close()
+        # PostgreSQL only
+        import psycopg2
+        from utils.db_connection import DBConnection
+        db_conn = DBConnection(user_db_conn)
+        conn = db_conn.get_connection()
+        try:
+            cursor = conn.cursor()
+            # Check if role exists in role_permissions table OR is a built-in role
+            cursor.execute('SELECT 1 FROM role_permissions WHERE role = %s LIMIT 1', (role,))
+            role_in_perms = cursor.fetchone() is not None
+            
+            # Also check if role is assigned to any user
+            cursor.execute('SELECT 1 FROM users WHERE role = %s LIMIT 1', (role,))
+            role_in_users = cursor.fetchone() is not None
+            
+            role_exists = role_in_perms or role_in_users
+        finally:
+            conn.close()
         
         data = request.get_json()
         if not data or 'permissions' not in data:
@@ -684,95 +500,51 @@ def create_app(config: dict = None) -> Flask:
         # If role doesn't exist but is being used by a user, create it automatically
         if not role_exists and role not in ROLES:
             # Create the role with the provided permissions
-            if user_db_conn and isinstance(user_db_conn, dict):
-                # PostgreSQL
-                import psycopg2
-                from utils.db_connection import DBConnection
-                db_conn = DBConnection(user_db_conn)
-                conn = db_conn.get_connection()
-                try:
-                    cursor = conn.cursor()
-                    unique_permissions = list(set(permissions))
-                    cursor.executemany(
-                        'INSERT INTO role_permissions (role, permission) VALUES (%s, %s)',
-                        [(role, perm) for perm in unique_permissions]
-                    )
-                    conn.commit()
-                    logger.info(f"Auto-created role '{role}' with permissions: {', '.join(unique_permissions)}")
-                    return jsonify({'success': True, 'permissions': unique_permissions, 'created': True})
-                finally:
-                    conn.close()
-            else:
-                # SQLite
-                import sqlite3
-                conn = sqlite3.connect(db_path)
-                try:
-                    cursor = conn.cursor()
-                    unique_permissions = list(set(permissions))
-                    cursor.executemany(
-                        'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
-                        [(role, perm) for perm in unique_permissions]
-                    )
-                    conn.commit()
-                    logger.info(f"Auto-created role '{role}' with permissions: {', '.join(unique_permissions)}")
-                    return jsonify({'success': True, 'permissions': unique_permissions, 'created': True})
-                finally:
-                    conn.close()
-        
-        if not role_exists and role not in ROLES:
-            return jsonify({'error': f'Invalid role. Role "{role}" does not exist'}), 400
-        
-        # Update permissions
-        if user_db_conn and isinstance(user_db_conn, dict):
-            # PostgreSQL
             import psycopg2
             from utils.db_connection import DBConnection
             db_conn = DBConnection(user_db_conn)
             conn = db_conn.get_connection()
             try:
                 cursor = conn.cursor()
-                
-                # Delete existing permissions for this role (including empty marker)
-                cursor.execute('DELETE FROM role_permissions WHERE role = %s', (role,))
-                
-                # Remove duplicates by using set
                 unique_permissions = list(set(permissions))
-                
-                # Insert new permissions using executemany
                 cursor.executemany(
                     'INSERT INTO role_permissions (role, permission) VALUES (%s, %s)',
                     [(role, perm) for perm in unique_permissions]
                 )
-                
                 conn.commit()
-                logger.info(f"Permissions for role '{role}' updated by '{current_user.username}'")
-                return jsonify({'success': True, 'permissions': unique_permissions})
+                logger.info(f"Auto-created role '{role}' with permissions: {', '.join(unique_permissions)}")
+                return jsonify({'success': True, 'permissions': unique_permissions, 'created': True})
             finally:
                 conn.close()
-        else:
-            # SQLite
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            try:
-                cursor = conn.cursor()
-                
-                # Delete existing permissions for this role (including empty marker)
-                cursor.execute('DELETE FROM role_permissions WHERE role = ?', (role,))
-                
-                # Remove duplicates by using set
-                unique_permissions = list(set(permissions))
-                
-                # Insert new permissions using executemany
-                cursor.executemany(
-                    'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
-                    [(role, perm) for perm in unique_permissions]
-                )
-                
-                conn.commit()
-                logger.info(f"Permissions for role '{role}' updated by '{current_user.username}'")
-                return jsonify({'success': True, 'permissions': unique_permissions})
-            finally:
-                conn.close()
+        
+        if not role_exists and role not in ROLES:
+            return jsonify({'error': f'Invalid role. Role "{role}" does not exist'}), 400
+        
+        # Update permissions
+        import psycopg2
+        from utils.db_connection import DBConnection
+        db_conn = DBConnection(user_db_conn)
+        conn = db_conn.get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Delete existing permissions for this role (including empty marker)
+            cursor.execute('DELETE FROM role_permissions WHERE role = %s', (role,))
+            
+            # Remove duplicates by using set
+            unique_permissions = list(set(permissions))
+            
+            # Insert new permissions using executemany
+            cursor.executemany(
+                'INSERT INTO role_permissions (role, permission) VALUES (%s, %s)',
+                [(role, perm) for perm in unique_permissions]
+            )
+            
+            conn.commit()
+            logger.info(f"Permissions for role '{role}' updated by '{current_user.username}'")
+            return jsonify({'success': True, 'permissions': unique_permissions})
+        finally:
+            conn.close()
 
     @app.route('/api/roles/<role>/permissions/reset', methods=['POST'])
     @login_required
@@ -784,130 +556,69 @@ def create_app(config: dict = None) -> Flask:
         # Get default permissions (uses 'default' fallback for custom roles)
         default_perms = get_role_default_permissions(role)
         
-        db_path = app.config.get('user_db_path')
         user_db_conn = app.config.get('user_db_conn')
         
-        # Determine connection method based on config
-        if user_db_conn and isinstance(user_db_conn, dict):
-            # PostgreSQL
-            import psycopg2
-            from utils.db_connection import DBConnection
-            db_conn = DBConnection(user_db_conn)
-            conn = db_conn.get_connection()
-            try:
-                cursor = conn.cursor()
-                
-                # Delete existing permissions
-                cursor.execute('DELETE FROM role_permissions WHERE role = %s', (role,))
-                
-                # Insert default permissions
-                for perm in default_perms:
-                    cursor.execute(
-                        'INSERT INTO role_permissions (role, permission) VALUES (%s, %s)',
-                        (role, perm)
-                    )
-                
-                conn.commit()
-                logger.info(f"Permissions for role '{role}' reset to defaults by '{current_user.username}'")
-                return jsonify({'success': True, 'permissions': default_perms})
-            finally:
-                conn.close()
-        else:
-            # SQLite
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            try:
-                cursor = conn.cursor()
-                
-                # Delete existing permissions
-                cursor.execute('DELETE FROM role_permissions WHERE role = ?', (role,))
-                
-                # Insert default permissions
-                for perm in default_perms:
-                    cursor.execute(
-                        'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
-                        (role, perm)
-                    )
-                
-                conn.commit()
-                logger.info(f"Permissions for role '{role}' reset to defaults by '{current_user.username}'")
-                return jsonify({'success': True, 'permissions': default_perms})
-            finally:
-                conn.close()
+        # PostgreSQL only
+        import psycopg2
+        from utils.db_connection import DBConnection
+        db_conn = DBConnection(user_db_conn)
+        conn = db_conn.get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Delete existing permissions
+            cursor.execute('DELETE FROM role_permissions WHERE role = %s', (role,))
+            
+            # Insert default permissions
+            for perm in default_perms:
+                cursor.execute(
+                    'INSERT INTO role_permissions (role, permission) VALUES (%s, %s)',
+                    (role, perm)
+                )
+            
+            conn.commit()
+            logger.info(f"Permissions for role '{role}' reset to defaults by '{current_user.username}'")
+            return jsonify({'success': True, 'permissions': default_perms})
+        finally:
+            conn.close()
 
     @app.route('/api/roles', methods=['GET'])
     @login_required
     def api_get_roles():
         """Get all roles (built-in + custom)."""
-        db_path = app.config.get('user_db_path')
         user_db_conn = app.config.get('user_db_conn')
-        
-        # Determine connection method based on config
-        if user_db_conn and isinstance(user_db_conn, dict):
-            # PostgreSQL
-            import psycopg2
-            from utils.db_connection import DBConnection
-            db_conn = DBConnection(user_db_conn)
-            conn = db_conn.get_connection()
-            try:
-                cursor = conn.cursor()
-                # Get all roles from role_permissions table
-                cursor.execute('SELECT DISTINCT role FROM role_permissions ORDER BY role')
-                roles_db = [r[0] for r in cursor.fetchall()]
-                
-                # Get built-in roles
-                roles_list = []
-                for role in ROLES.keys():
+        # PostgreSQL
+        import psycopg2
+        from utils.db_connection import DBConnection
+        db_conn = DBConnection(user_db_conn)
+        conn = db_conn.get_connection()
+        try:
+            cursor = conn.cursor()
+            # Get all roles from role_permissions table
+            cursor.execute('SELECT DISTINCT role FROM role_permissions ORDER BY role')
+            roles_db = [r[0] for r in cursor.fetchall()]
+            
+            # Get built-in roles
+            roles_list = []
+            for role in ROLES.keys():
+                roles_list.append({
+                    'role': role,
+                    'label': ROLE_LABELS.get(role, role.capitalize()),
+                    'builtin': True
+                })
+            
+            # Add custom roles
+            for role in roles_db:
+                if role not in ROLES:
                     roles_list.append({
                         'role': role,
-                        'label': ROLE_LABELS.get(role, role.capitalize()),
-                        'builtin': True
+                        'label': role.capitalize(),
+                        'builtin': False
                     })
-                
-                # Add custom roles
-                for role in roles_db:
-                    if role not in ROLES:
-                        roles_list.append({
-                            'role': role,
-                            'label': role.capitalize(),
-                            'builtin': False
-                        })
-                
-                return jsonify({'success': True, 'roles': roles_list})
-            finally:
-                conn.close()
-        else:
-            # SQLite
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            try:
-                cursor = conn.cursor()
-                # Get all roles from role_permissions table
-                cursor.execute('SELECT DISTINCT role FROM role_permissions ORDER BY role')
-                roles_db = [r['role'] for r in cursor.fetchall()]
-                
-                # Get built-in roles
-                roles_list = []
-                for role in ROLES.keys():
-                    roles_list.append({
-                        'role': role,
-                        'label': ROLE_LABELS.get(role, role.capitalize()),
-                        'builtin': True
-                    })
-                
-                # Add custom roles
-                for role in roles_db:
-                    if role not in ROLES:
-                        roles_list.append({
-                            'role': role,
-                            'label': role.capitalize(),
-                            'builtin': False
-                        })
-                
-                return jsonify({'success': True, 'roles': roles_list})
-            finally:
-                conn.close()
+            
+            return jsonify({'success': True, 'roles': roles_list})
+        finally:
+            conn.close()
 
     @app.route('/api/roles', methods=['POST'])
     @login_required
@@ -939,77 +650,41 @@ def create_app(config: dict = None) -> Flask:
         if invalid:
             return jsonify({'error': f'Invalid permissions: {", ".join(invalid)}'}), 400
         
-        db_path = app.config.get('user_db_path')
         user_db_conn = app.config.get('user_db_conn')
-        
-        # Determine connection method based on config
-        if user_db_conn and isinstance(user_db_conn, dict):
-            # PostgreSQL
-            import psycopg2
-            from utils.db_connection import DBConnection
-            db_conn = DBConnection(user_db_conn)
-            conn = db_conn.get_connection()
-            try:
-                cursor = conn.cursor()
-                
-                # Check if role already exists (in role_permissions or users table)
-                cursor.execute('SELECT 1 FROM role_permissions WHERE role = %s LIMIT 1', (role,))
-                role_in_perms = cursor.fetchone() is not None
-                cursor.execute('SELECT 1 FROM users WHERE role = %s LIMIT 1', (role,))
-                role_in_users = cursor.fetchone() is not None
-                
-                if role_in_perms or role_in_users:
-                    return jsonify({'error': f'Role "{role}" already exists'}), 400
-                
-                # Remove duplicates
-                unique_permissions = list(set(permissions))
-                
-                # Insert role with permissions using executemany
-                cursor.executemany(
-                    'INSERT INTO role_permissions (role, permission) VALUES (%s, %s)',
-                    [(role, perm) for perm in unique_permissions]
-                )
-                
-                conn.commit()
-                logger.info(f"New role '{role}' created by '{current_user.username}' with {len(unique_permissions)} permission(s): {', '.join(unique_permissions)}")
-                return jsonify({'success': True, 'role': role, 'permissions': unique_permissions})
-            except psycopg2.IntegrityError:
-                conn.rollback()
+        # PostgreSQL
+        import psycopg2
+        from utils.db_connection import DBConnection
+        db_conn = DBConnection(user_db_conn)
+        conn = db_conn.get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Check if role already exists (in role_permissions or users table)
+            cursor.execute('SELECT 1 FROM role_permissions WHERE role = %s LIMIT 1', (role,))
+            role_in_perms = cursor.fetchone() is not None
+            cursor.execute('SELECT 1 FROM users WHERE role = %s LIMIT 1', (role,))
+            role_in_users = cursor.fetchone() is not None
+            
+            if role_in_perms or role_in_users:
                 return jsonify({'error': f'Role "{role}" already exists'}), 400
-            finally:
-                conn.close()
-        else:
-            # SQLite
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            try:
-                cursor = conn.cursor()
-                
-                # Check if role already exists (in role_permissions or users table)
-                cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
-                role_in_perms = cursor.fetchone() is not None
-                cursor.execute('SELECT 1 FROM users WHERE role = ? LIMIT 1', (role,))
-                role_in_users = cursor.fetchone() is not None
-                
-                if role_in_perms or role_in_users:
-                    return jsonify({'error': f'Role "{role}" already exists'}), 400
-                
-                # Remove duplicates
-                unique_permissions = list(set(permissions))
-                
-                # Insert role with permissions using executemany
-                cursor.executemany(
-                    'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
-                    [(role, perm) for perm in unique_permissions]
-                )
-                
-                conn.commit()
-                logger.info(f"New role '{role}' created by '{current_user.username}' with {len(unique_permissions)} permission(s): {', '.join(unique_permissions)}")
-                return jsonify({'success': True, 'role': role, 'permissions': unique_permissions})
-            except sqlite3.IntegrityError:
-                return jsonify({'error': f'Role "{role}" already exists'}), 400
-            finally:
-                conn.close()
+            
+            # Remove duplicates
+            unique_permissions = list(set(permissions))
+            
+            # Insert role with permissions using executemany
+            cursor.executemany(
+                'INSERT INTO role_permissions (role, permission) VALUES (%s, %s)',
+                [(role, perm) for perm in unique_permissions]
+            )
+            
+            conn.commit()
+            logger.info(f"New role '{role}' created by '{current_user.username}' with {len(unique_permissions)} permission(s): {', '.join(unique_permissions)}")
+            return jsonify({'success': True, 'role': role, 'permissions': unique_permissions})
+        except psycopg2.IntegrityError:
+            conn.rollback()
+            return jsonify({'error': f'Role "{role}" already exists'}), 400
+        finally:
+            conn.close()
 
     @app.route('/api/roles/<role>', methods=['PUT'])
     @login_required
@@ -1020,92 +695,48 @@ def create_app(config: dict = None) -> Flask:
         if not data:
             return jsonify({'error': 'No data provided'}), 400
         
-        db_path = app.config.get('user_db_path')
         user_db_conn = app.config.get('user_db_conn')
-        
-        # Determine connection method based on config
-        if user_db_conn and isinstance(user_db_conn, dict):
-            # PostgreSQL
-            import psycopg2
-            from utils.db_connection import DBConnection
-            db_conn = DBConnection(user_db_conn)
-            conn = db_conn.get_connection()
-            try:
-                cursor = conn.cursor()
+        # PostgreSQL
+        import psycopg2
+        from utils.db_connection import DBConnection
+        db_conn = DBConnection(user_db_conn)
+        conn = db_conn.get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Check if role exists
+            cursor.execute('SELECT 1 FROM role_permissions WHERE role = %s LIMIT 1', (role,))
+            if not cursor.fetchone():
+                return jsonify({'error': f'Role "{role}" does not exist'}), 404
+            
+            # Update permissions if provided
+            if 'permissions' in data:
+                permissions = data['permissions']
+                if not isinstance(permissions, list):
+                    return jsonify({'error': 'permissions must be an array'}), 400
                 
-                # Check if role exists
-                cursor.execute('SELECT 1 FROM role_permissions WHERE role = %s LIMIT 1', (role,))
-                if not cursor.fetchone():
-                    return jsonify({'error': f'Role "{role}" does not exist'}), 404
+                # Validate all permissions exist
+                from utils.permissions import PERMISSIONS
+                invalid = [p for p in permissions if p not in PERMISSIONS]
+                if invalid:
+                    return jsonify({'error': f'Invalid permissions: {", ".join(invalid)}'}), 400
                 
-                # Update permissions if provided
-                if 'permissions' in data:
-                    permissions = data['permissions']
-                    if not isinstance(permissions, list):
-                        return jsonify({'error': 'permissions must be an array'}), 400
-                    
-                    # Validate all permissions exist
-                    from utils.permissions import PERMISSIONS
-                    invalid = [p for p in permissions if p not in PERMISSIONS]
-                    if invalid:
-                        return jsonify({'error': f'Invalid permissions: {", ".join(invalid)}'}), 400
-                    
-                    # Delete existing permissions
-                    cursor.execute('DELETE FROM role_permissions WHERE role = %s', (role,))
-                    
-                    # Insert new permissions
-                    unique_permissions = list(set(permissions))
-                    cursor.executemany(
-                        'INSERT INTO role_permissions (role, permission) VALUES (%s, %s)',
-                        [(role, perm) for perm in unique_permissions]
-                    )
-                    
-                    logger.info(f"Role '{role}' permissions updated by '{current_user.username}': {', '.join(unique_permissions)}")
+                # Delete existing permissions
+                cursor.execute('DELETE FROM role_permissions WHERE role = %s', (role,))
                 
-                conn.commit()
-                return jsonify({'success': True, 'role': role})
-            finally:
-                conn.close()
-        else:
-            # SQLite
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            try:
-                cursor = conn.cursor()
+                # Insert new permissions
+                unique_permissions = list(set(permissions))
+                cursor.executemany(
+                    'INSERT INTO role_permissions (role, permission) VALUES (%s, %s)',
+                    [(role, perm) for perm in unique_permissions]
+                )
                 
-                # Check if role exists
-                cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
-                if not cursor.fetchone():
-                    return jsonify({'error': f'Role "{role}" does not exist'}), 404
-                
-                # Update permissions if provided
-                if 'permissions' in data:
-                    permissions = data['permissions']
-                    if not isinstance(permissions, list):
-                        return jsonify({'error': 'permissions must be an array'}), 400
-                    
-                    # Validate all permissions exist
-                    from utils.permissions import PERMISSIONS
-                    invalid = [p for p in permissions if p not in PERMISSIONS]
-                    if invalid:
-                        return jsonify({'error': f'Invalid permissions: {", ".join(invalid)}'}), 400
-                    
-                    # Delete existing permissions
-                    cursor.execute('DELETE FROM role_permissions WHERE role = ?', (role,))
-                    
-                    # Insert new permissions
-                    unique_permissions = list(set(permissions))
-                    cursor.executemany(
-                        'INSERT INTO role_permissions (role, permission) VALUES (?, ?)',
-                        [(role, perm) for perm in unique_permissions]
-                    )
-                    
-                    logger.info(f"Role '{role}' permissions updated by '{current_user.username}': {', '.join(unique_permissions)}")
-                
-                conn.commit()
-                return jsonify({'success': True, 'role': role})
-            finally:
-                conn.close()
+                logger.info(f"Role '{role}' permissions updated by '{current_user.username}': {', '.join(unique_permissions)}")
+            
+            conn.commit()
+            return jsonify({'success': True, 'role': role})
+        finally:
+            conn.close()
 
     @app.route('/api/roles/<role>', methods=['DELETE'])
     @login_required
@@ -1115,62 +746,32 @@ def create_app(config: dict = None) -> Flask:
         if role in ('admin', 'operator', 'viewer'):
             return jsonify({'error': 'Cannot delete built-in roles'}), 403
         
-        db_path = app.config.get('user_db_path')
         user_db_conn = app.config.get('user_db_conn')
-        
-        # Determine connection method based on config
-        if user_db_conn and isinstance(user_db_conn, dict):
-            # PostgreSQL
-            import psycopg2
-            from utils.db_connection import DBConnection
-            db_conn = DBConnection(user_db_conn)
-            conn = db_conn.get_connection()
-            try:
-                cursor = conn.cursor()
-                
-                # Check if role exists in role_permissions OR users table
-                cursor.execute('SELECT 1 FROM role_permissions WHERE role = %s LIMIT 1', (role,))
-                role_in_perms = cursor.fetchone() is not None
-                cursor.execute('SELECT 1 FROM users WHERE role = %s LIMIT 1', (role,))
-                role_in_users = cursor.fetchone() is not None
-                
-                if not role_in_perms and not role_in_users:
-                    return jsonify({'error': f'Role "{role}" not found'}), 404
-                
-                # Delete role permissions
-                cursor.execute('DELETE FROM role_permissions WHERE role = %s', (role,))
-                
-                conn.commit()
-                logger.info(f"Role '{role}' deleted by '{current_user.username}'")
-                return jsonify({'success': True})
-            finally:
-                conn.close()
-        else:
-            # SQLite
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            try:
-                cursor = conn.cursor()
-                
-                # Check if role exists in role_permissions OR users table
-                cursor.execute('SELECT 1 FROM role_permissions WHERE role = ? LIMIT 1', (role,))
-                role_in_perms = cursor.fetchone() is not None
-                cursor.execute('SELECT 1 FROM users WHERE role = ? LIMIT 1', (role,))
-                role_in_users = cursor.fetchone() is not None
-                
-                if not role_in_perms and not role_in_users:
-                    return jsonify({'error': f'Role "{role}" not found'}), 404
-                
-                # Delete role permissions
-                cursor.execute('DELETE FROM role_permissions WHERE role = ?', (role,))
-                
-                conn.commit()
-                logger.info(f"Role '{role}' deleted by '{current_user.username}'")
-                return jsonify({'success': True})
-            finally:
-                conn.close()
-
-    # ── API Routes - Protected by login (read-only) ────────────
+        # PostgreSQL
+        import psycopg2
+        from utils.db_connection import DBConnection
+        db_conn = DBConnection(user_db_conn)
+        conn = db_conn.get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Check if role exists in role_permissions OR users table
+            cursor.execute('SELECT 1 FROM role_permissions WHERE role = %s LIMIT 1', (role,))
+            role_in_perms = cursor.fetchone() is not None
+            cursor.execute('SELECT 1 FROM users WHERE role = %s LIMIT 1', (role,))
+            role_in_users = cursor.fetchone() is not None
+            
+            if not role_in_perms and not role_in_users:
+                return jsonify({'error': f'Role "{role}" not found'}), 404
+            
+            # Delete role permissions
+            cursor.execute('DELETE FROM role_permissions WHERE role = %s', (role,))
+            
+            conn.commit()
+            logger.info(f"Role '{role}' deleted by '{current_user.username}'")
+            return jsonify({'success': True})
+        finally:
+            conn.close()
 
     @app.route('/api/orders', methods=['GET'])
     @login_required

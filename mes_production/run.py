@@ -27,7 +27,11 @@ def main():
     
     print(f"🏭 MES Production System starting...")
     print(f"   Server: http://{host}:{port}")
-    print(f"   Database: {config.get('database', {}).get('path', 'data/mes.db')}")
+    db_cfg = config.get('database', {})
+    if db_cfg.get('engine') == 'postgresql':
+        print(f"   Database: PostgreSQL {db_cfg.get('name', 'mes_production')}@{db_cfg.get('host', 'localhost')}:{db_cfg.get('port', 5432)}")
+    else:
+        print(f"   Database: PostgreSQL (configured in config.yaml)")
     print(f"   Press Ctrl+C to stop")
     print()
     

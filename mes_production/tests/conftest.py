@@ -7,7 +7,6 @@ import pytest
 import tempfile
 import logging
 import yaml
-import sqlite3
 from datetime import datetime
 from werkzeug.security import generate_password_hash
 
@@ -49,57 +48,34 @@ def _init_test_users(config):
     conn = db.get_connection()
     try:
         cursor = db.cursor(conn)
-        if db.engine == 'postgresql':
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
-                    username TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    role TEXT NOT NULL DEFAULT 'viewer',
-                    is_active INTEGER NOT NULL DEFAULT 1,
-                    password_changed INTEGER NOT NULL DEFAULT 1,
-                    created_at TEXT NOT NULL
-                )
-            ''')
-        else:
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    role TEXT NOT NULL DEFAULT 'viewer',
-                    is_active INTEGER NOT NULL DEFAULT 1,
-                    password_changed INTEGER NOT NULL DEFAULT 1,
-                    created_at TEXT NOT NULL
-                )
-            ''')
+        # PostgreSQL-only table creation
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'viewer',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                password_changed INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            )
+        ''')
         now = datetime.now().isoformat()
         ph = db.placeholder()
         # Admin user (password_changed=1 so no redirect in tests)
         admin_hash = generate_password_hash('admin')
-        if db.engine == 'postgresql':
-            cursor.execute(f'''
-                INSERT INTO users (username, password_hash, role, password_changed, created_at)
-                VALUES ({ph}, {ph}, 'admin', 1, {ph})
-                ON CONFLICT (username) DO NOTHING
-            ''', ('admin', admin_hash, now))
-            # Viewer user
-            viewer_hash = generate_password_hash('viewer')
-            cursor.execute(f'''
-                INSERT INTO users (username, password_hash, role, password_changed, created_at)
-                VALUES ({ph}, {ph}, 'viewer', 1, {ph})
-                ON CONFLICT (username) DO NOTHING
-            ''', ('viewer', viewer_hash, now))
-        else:
-            cursor.execute('''
-                INSERT OR IGNORE INTO users (username, password_hash, role, password_changed, created_at)
-                VALUES (?, ?, 'admin', 1, ?)
-            ''', ('admin', admin_hash, now))
-            viewer_hash = generate_password_hash('viewer')
-            cursor.execute('''
-                INSERT OR IGNORE INTO users (username, password_hash, role, password_changed, created_at)
-                VALUES (?, ?, 'viewer', 1, ?)
-            ''', ('viewer', viewer_hash, now))
+        cursor.execute(f'''
+            INSERT INTO users (username, password_hash, role, password_changed, created_at)
+            VALUES ({ph}, {ph}, 'admin', 1, {ph})
+            ON CONFLICT (username) DO NOTHING
+        ''', ('admin', admin_hash, now))
+        # Viewer user
+        viewer_hash = generate_password_hash('viewer')
+        cursor.execute(f'''
+            INSERT INTO users (username, password_hash, role, password_changed, created_at)
+            VALUES ({ph}, {ph}, 'viewer', 1, {ph})
+            ON CONFLICT (username) DO NOTHING
+        ''', ('viewer', viewer_hash, now))
         conn.commit()
     finally:
         conn.close()

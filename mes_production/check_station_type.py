@@ -1,15 +1,22 @@
 #!/usr/bin/env python
 """
-Проверка точного типа current_station в БД
+Проверка точного типа current_station в БД - PostgreSQL версия
 """
 from utils.db_connection import DBConnection
+from config import load_config
 
-db = DBConnection('data/mes.db')
+try:
+    config = load_config()
+    db = DBConnection(config['database'])
+except Exception:
+    print("Ошибка загрузки конфигурации. Используйте PostgreSQL конфигурацию в config.yaml")
+    exit(1)
+
 conn = db.get_connection()
 cur = db.cursor(conn)
 
 # Проверить точное значение current_station
-cur.execute("SELECT id, order_number, current_station, typeof(current_station) as station_type FROM orders WHERE id = 5")
+cur.execute("SELECT id, order_number, current_station, pg_typeof(current_station) as station_type FROM orders WHERE id = 5")
 row = cur.fetchone()
 print(f"Заказ 5: {dict(row)}")
 
