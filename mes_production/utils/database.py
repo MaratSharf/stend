@@ -727,7 +727,9 @@ class Database:
 
     def get_stations(self) -> List[Dict[str, Any]]:
         """Get all stations with their current orders.
-        For main stations (integer IDs), includes orders from both main station and sub-stations."""
+        For all stations in a group (main station and its sub-stations), 
+        includes orders from the entire group (main station + all sub-stations).
+        This ensures orders are visible on all related stations."""
         conn = self.get_connection()
         try:
             cursor = self._cursor(conn)
@@ -741,59 +743,54 @@ class Database:
             ph = self._placeholder()
             for station in stations:
                 station_id = station['id']
-                # For main stations (integer IDs), also include orders from sub-stations
-                if station_id == int(station_id):
-                    main_id = int(station_id)
-                    # Main station: find all sub-stations (e.g., 6.0 -> 6.1, 6.2)
-                    # Sub-stations have IDs like 6.1, 6.2, etc. (main_id < id < main_id + 1)
+                # Get the main station ID (integer part)
+                main_id = int(station_id)
+                
+                # Find all sub-stations for this main station
+                if self.engine == 'postgresql':
+                    cursor.execute('''
+                        SELECT s.id FROM stations s 
+                        WHERE s.id > %s AND s.id < %s
+                        ORDER BY s.id
+                    ''', (float(main_id), float(main_id + 1)))
+                else:
+                    cursor.execute('''
+                        SELECT s.id FROM stations s 
+                        WHERE s.id > ? AND s.id < ?
+                        ORDER BY s.id
+                    ''', (float(main_id), float(main_id + 1)))
+                sub_ids = [row['id'] for row in cursor.fetchall()]
+                
+                # Build list of all station IDs in this group (main + all subs)
+                ids = [float(main_id)] + sub_ids
+                
+                # Get orders from all stations in the group
+                if len(ids) > 1:
                     if self.engine == 'postgresql':
-                        cursor.execute('''
-                            SELECT s.id FROM stations s 
-                            WHERE s.id > %s AND s.id < %s
-                            ORDER BY s.id
-                        ''', (float(main_id), float(main_id + 1)))
-                    else:
-                        cursor.execute('''
-                            SELECT s.id FROM stations s 
-                            WHERE s.id > ? AND s.id < ?
-                            ORDER BY s.id
-                        ''', (float(main_id), float(main_id + 1)))
-                    sub_ids = [row['id'] for row in cursor.fetchall()]
-                    
-                    # Build IN clause for main + subs
-                    if sub_ids:
-                        ids = [float(main_id)] + sub_ids
-                        if self.engine == 'postgresql':
-                            placeholders = ','.join(['%s'] * len(ids))
-                            cursor.execute(f'''
-                                SELECT id, order_number, product_code, color, quantity, batch
-                                FROM orders
-                                WHERE current_station IN ({placeholders}) AND status = 'production'
-                                ORDER BY id
-                            ''', ids)
-                        else:
-                            placeholders = ','.join(['?'] * len(ids))
-                            cursor.execute(f'''
-                                SELECT id, order_number, product_code, color, quantity, batch
-                                FROM orders
-                                WHERE current_station IN ({placeholders}) AND status = 'production'
-                                ORDER BY id
-                            ''', ids)
-                    else:
+                        placeholders = ','.join(['%s'] * len(ids))
                         cursor.execute(f'''
                             SELECT id, order_number, product_code, color, quantity, batch
                             FROM orders
-                            WHERE current_station = {ph} AND status = 'production'
+                            WHERE current_station IN ({placeholders}) AND status = 'production'
                             ORDER BY id
-                        ''', (float(main_id),))
+                        ''', ids)
+                    else:
+                        placeholders = ','.join(['?'] * len(ids))
+                        cursor.execute(f'''
+                            SELECT id, order_number, product_code, color, quantity, batch
+                            FROM orders
+                            WHERE current_station IN ({placeholders}) AND status = 'production'
+                            ORDER BY id
+                        ''', ids)
                 else:
-                    # Sub-station: only orders on this exact station
+                    # Only main station exists, no sub-stations
                     cursor.execute(f'''
                         SELECT id, order_number, product_code, color, quantity, batch
                         FROM orders
                         WHERE current_station = {ph} AND status = 'production'
                         ORDER BY id
-                    ''', (station_id,))
+                    ''', (float(main_id),))
+                
                 station['orders'] = [dict(row) for row in cursor.fetchall()]
 
             return stations

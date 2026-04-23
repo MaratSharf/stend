@@ -5,37 +5,42 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Logs
-*.log
-
 # Database
-*.db
+data/mes.db
 
 # Environment
 .env
 .env.local
 *.env.*
 
-# Dependencies
-.venv/
-venv/
-pip-log.txt
-pip-selfcheck.json
+# Logs
+*.log
 
-# Testing
-.coverage
-coverage/
-htmlcov/
-.pytest_cache/
-.mypy_cache/
-
-# IDE
-.vscode/
-.idea/
+# Temporary files
+*.tmp
 *.swp
 *.swo
 
-# OS
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# MyPy
+.mypy_cache/
+
+# PyTest
+.pytest_cache/
+
+# VSCode
+.vscode/
+
+# IntelliJ/PyCharm
+.idea/
+
+# macOS
 .DS_Store
+
+# Windows
 Thumbs.db
 ```
