@@ -31,9 +31,36 @@ mes_production/
 │   ├── models.py         # Модели User, ROLES
 │   └── app.py            # Flask приложение + API endpoints
 ├── utils/
-│   └── permissions.py    # Права доступа (permissions)
+│   ├── permissions.py    # Права доступа (permissions)
+│   └── role_service.py   # Сервис управления ролями
 └── data/
-    └── users.db          # База данных пользователей и ролей
+    └── users.db          # База данных пользователей и ролей (SQLite резервная)
+```
+
+### База данных пользователей
+
+Пользователи хранятся в PostgreSQL (таблица `users`):
+
+```sql
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL,
+    is_active INTEGER DEFAULT 1,
+    password_changed INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+```
+
+Таблица `role_permissions` связывает роли с правами:
+
+```sql
+CREATE TABLE role_permissions (
+    role TEXT NOT NULL,
+    permission TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (role, permission)
+);
 ```
 
 ---
@@ -44,7 +71,7 @@ mes_production/
 
 **Как работает:**
 1. Пользователь вводит логин/пароль на `/login`
-2. Сервер проверяет credentials в `users.db`
+2. Сервер проверяет credentials в PostgreSQL (таблица `users`)
 3. При успехе создаётся сессия Flask-Login
 4. CSRF-токен генерируется для защиты POST-запросов
 5. Сессия сохраняется в cookie
@@ -70,13 +97,24 @@ username=admin&password=admin123&remember=on
 ```
 
 **Ответ:**
-- Успех: редирект на `/` (главная)
+- Успех: редирект на `/` (главная) или умный редирект на первую доступную страницу
 - Ошибка: редирект на `/login` с сообщением об ошибке
 
 **Принудительная смена пароля:**
 - При первом входе `admin` должен сменить пароль
 - Перенаправление на `/change-password`
 - Пароль должен быть минимум 6 символов
+
+**Умный редирект после входа:**
+Система автоматически определяет первую доступную страницу на основе прав пользователя:
+1. `order_view` → `/` (главная с заказами)
+2. `production_view` + `map_view` → `/map` (карта производства)
+3. `production_view` → `/station` (статус станций)
+4. `map_view` → `/map` (карта)
+5. `station_view` → `/tracking` (трекинг)
+6. `view_statistics` → `/statistics` (статистика)
+7. `user_view` → `/users` (пользователи)
+8. `role_view` → `/roles` (роли)
 
 ### 2. API-ключи (для скриптов)
 
@@ -123,14 +161,16 @@ curl -H "X-API-Key: my-secret-key-123" \
 
 | Категория | Права | Описание |
 |-----------|-------|----------|
-| **orders** | `order_create`, `order_launch`, `order_move`, `order_complete`, `order_cancel` | Управление заказами |
+| **orders** | `order_view`, `order_create`, `order_launch`, `order_move`, `order_complete`, `order_cancel` | Управление заказами |
 | **stations** | `station_view`, `station_control` | Управление станциями |
-| **users** | `user_view`, `user_create`, `user_edit`, `user_delete` | Управление пользователями |
-| **roles** | `role_view`, `role_edit` | Управление ролями |
+| **production** | `production_view`, `map_view` | Просмотр производства и карты |
+| **users** | `user_view`, `manage_users` | Управление пользователями |
+| **roles** | `role_view`, `manage_roles` | Управление ролями |
 
 **Файл `utils/permissions.py`:**
 ```python
 PERMISSIONS = {
+    'order_view': 'Просмотр заказов',
     'order_create': 'Создать заказ',
     'order_launch': 'Запустить заказ',
     'order_move': 'Переместить заказ',
@@ -138,41 +178,27 @@ PERMISSIONS = {
     'order_cancel': 'Отменить заказ',
     'station_view': 'Просмотр станции',
     'station_control': 'Управление станцией',
+    'production_view': 'Просмотр производства',
+    'map_view': 'Просмотр карты',
     'user_view': 'Просмотр пользователей',
-    'user_create': 'Создать пользователя',
-    'user_edit': 'Редактировать пользователя',
-    'user_delete': 'Удалить пользователя',
+    'manage_users': 'Управление пользователями',
     'role_view': 'Просмотр ролей',
-    'role_edit': 'Редактировать роли',
+    'manage_roles': 'Управление ролями',
 }
 
-CATEGORIES = ['orders', 'stations', 'users', 'roles']
+CATEGORIES = ['orders', 'stations', 'production', 'users', 'roles']
 
 DEFAULT_ROLE_PERMISSIONS = {
-    'admin': ['order_create', 'order_launch', 'order_move', 'order_complete', 'order_cancel',
-              'station_view', 'station_control',
-              'user_view', 'user_create', 'user_edit', 'user_delete',
-              'role_view', 'role_edit'],
-    'operator': ['order_launch', 'order_move', 'order_complete', 'order_cancel',
-                 'station_view', 'station_control'],
+    'admin': ['order_view', 'order_create', 'order_launch', 'order_move', 
+              'order_complete', 'order_cancel', 'station_view', 'station_control',
+              'production_view', 'map_view', 'user_view', 'manage_users',
+              'role_view', 'manage_roles'],
+    'operator': ['order_view', 'order_create', 'order_launch', 'order_move', 
+                 'order_complete', 'order_cancel', 'station_view', 'station_control',
+                 'production_view', 'map_view'],
     'viewer': ['order_view', 'station_view'],
 }
 ```
-
-### Таблица БД: `role_permissions`
-
-```sql
-CREATE TABLE role_permissions (
-    role TEXT NOT NULL,
-    permission TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (role, permission)
-);
-```
-
-**Особенности:**
-- Кастомные роли имеют запись с `permission=''` (пустой маркер)
-- Встроенные роли имеют записи с реальными правами
-- Удаление роли: `DELETE FROM role_permissions WHERE role = ?`
 
 ---
 
@@ -184,7 +210,8 @@ CREATE TABLE role_permissions (
 1. Войти как `admin`
 2. Перейти на `/roles`
 3. Ввести имя роли в поле "Новая роль"
-4. Нажать "Создать роль"
+4. Выбрать нужные права
+5. Нажать "Создать роль"
 
 **Через API:**
 ```bash
@@ -193,21 +220,13 @@ Content-Type: application/json
 X-API-Key: my-secret-key-123
 
 {
-    "role": "supervisor"
-}
-```
-
-**Ответ:**
-```json
-{
-    "success": true,
     "role": "supervisor",
-    "permissions": []
+    "permissions": ["order_view", "order_create", "station_view"]
 }
 ```
 
 **Валидация:**
-- Имя роли: только буквы и underscores (`isidentifier()`)
+- Имя роли: только буквы и underscores
 - Уникальность: нельзя создать дубликат
 - Преобразование: имя приводится к нижнему регистру
 
@@ -231,14 +250,6 @@ X-API-Key: my-secret-key-123
         "order_move",
         "station_view"
     ]
-}
-```
-
-**Ответ:**
-```json
-{
-    "success": true,
-    "permissions": ["order_create", "order_launch", "order_move", "station_view"]
 }
 ```
 
@@ -308,14 +319,6 @@ X-API-Key: my-secret-key-123
 - `password`: требуется, минимум 6 символов
 - `role`: должен существовать в `role_permissions` (built-in или custom)
 
-**Ответ:**
-```json
-{
-    "success": true,
-    "id": 5
-}
-```
-
 ### Редактирование пользователя
 
 **Что можно изменить:**
@@ -369,23 +372,11 @@ X-API-Key: my-secret-key-123
 | POST | `/api/roles/<role>/permissions` | Admin | Установить права |
 | POST | `/api/roles/<role>/permissions/reset` | Admin | Сбросить права (built-in) |
 
-**GET /api/roles:**
-```json
-{
-    "success": true,
-    "roles": [
-        {"role": "admin", "label": "Администратор", "builtin": true},
-        {"role": "operator", "label": "Оператор", "builtin": true},
-        {"role": "viewer", "label": "Наблюдатель", "builtin": true},
-        {"role": "supervisor", "label": "Supervisor", "builtin": false}
-    ]
-}
-```
-
 ### Эндпоинты пользователей
 
 | Метод | Endpoint | Доступ | Описание |
 |-------|----------|--------|----------|
+| GET | `/users` | Admin | Страница управления пользователями |
 | POST | `/api/users` | Admin | Создать пользователя |
 | POST | `/api/users/<id>` | Admin | Обновить пользователя |
 | DELETE | `/api/users/<id>` | Admin | Удалить пользователя |
@@ -415,7 +406,7 @@ X-API-Key: my-secret-key-123
 4. При успехе:
    - login_user(user) — Flask-Login
    - session['user_id'] = user.id
-   - redirect to /
+   - Smart redirect на первую доступную страницу
 5. При ошибке:
    - flash('Неверный логин или пароль')
    - redirect to /login
@@ -423,13 +414,13 @@ X-API-Key: my-secret-key-123
 
 ### Проверка прав (декораторы)
 
-**require_role('admin'):**
+**require_permission('order_create'):**
 ```python
-@app.route('/users')
+@app.route('/api/orders', methods=['POST'])
 @login_required
-@require_role('admin')
-def users_page():
-    # Только администраторы
+@require_permission('order_create')
+def api_create_order():
+    # Нужен конкретный permission
     pass
 ```
 
@@ -442,13 +433,13 @@ def api_create_order():
     pass
 ```
 
-**require_permission('order_create'):**
+**require_permission('manage_users'):**
 ```python
-@app.route('/api/orders', methods=['POST'])
+@app.route('/api/users', methods=['POST'])
 @login_required
-@require_permission('order_create')
-def api_create_order():
-    # Нужен конкретный permission
+@require_permission('manage_users')
+def api_create_user():
+    # Только пользователи с правом manage_users
     pass
 ```
 
@@ -476,18 +467,10 @@ BASE_URL = "http://localhost:5000"
 # Создать роль
 response = requests.post(
     f"{BASE_URL}/api/roles",
-    json={"role": "qa_engineiner"},
+    json={"role": "qa_engineer", "permissions": ["order_view", "station_view"]},
     headers={"X-API-Key": API_KEY}
 )
-print(response.json())  # {"success": true, "role": "qa_engineiner", "permissions": []}
-
-# Настроить права
-response = requests.post(
-    f"{BASE_URL}/api/roles/qa_engineiner/permissions",
-    json={"permissions": ["order_view", "station_view", "order_complete"]},
-    headers={"X-API-Key": API_KEY}
-)
-print(response.json())
+print(response.json())  # {"success": true, "role": "qa_engineer", "permissions": [...]}
 
 # Создать пользователя
 response = requests.post(
@@ -495,7 +478,7 @@ response = requests.post(
     json={
         "username": "anna_qa",
         "password": "qa123456",
-        "role": "qa_engineiner"
+        "role": "qa_engineer"
     },
     headers={"X-API-Key": API_KEY}
 )
@@ -622,18 +605,30 @@ INSERT INTO role_permissions (role, permission) VALUES ('xxx', '');
 - Создайте кастомную роль вместо этого
 - Используйте кастомную роль для назначения пользователям
 
+### Ошибка подключения к PostgreSQL
+
+```
+psycopg2.OperationalError: connection refused
+```
+
+**Решение:**
+- Убедитесь, что PostgreSQL запущен
+- Проверьте настройки в `config.yaml`
+- Проверьте имя базы данных и пользователя
+
 ---
 
 ## 📚 Дополнительные ресурсы
 
-- `AUTH_IMPLEMENTATION.md` — техническая документация по реализации
+- `README_RU.md` — основная документация
 - `KODA.md` — общий контекст проекта
 - `utils/permissions.py` — список всех прав доступа
 - `web/auth_user.py` — код Flask-Login интеграции
 - `web/auth.py` — код API-ключей
+- `ROLE_MANAGEMENT_IMPROVEMENTS.md` — план улучшений ролевой модели
 
 ---
 
 *Документация создана для MES Production System*
-*Версия: 1.0*
-*Дата: 2026-04-17*
+*Версия: 0.6.3*
+*Дата: 2026-04-23*
