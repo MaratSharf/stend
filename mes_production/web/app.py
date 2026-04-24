@@ -2,6 +2,7 @@
 MES Production System - Flask Application
 """
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
+from flask_cors import CORS
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from core.controller import Controller
@@ -36,6 +37,9 @@ def create_app(config: dict = None) -> Flask:
 
     app = Flask(__name__)
     app.secret_key = os.urandom(24)  # For flash sessions
+
+    # ── Enable CORS for QR Scanner service ─────────────────────
+    CORS(app, resources={r"/api/*": {"origins": "http://localhost:5001"}})
 
     # ── Initialize database ────────────────────────────────────
     db_config = config.get('database', {})
