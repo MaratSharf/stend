@@ -732,14 +732,15 @@
                 statusDiv.textContent = 'Завершение подстанции 6.1...';
                 statusDiv.className = 'status scanning';
 
-                const response = await fetch(`${QR_SCANNER_URL}/api/complete-station`, {
+                // Отправляем на MES API (порт 5000), а не на локальный сервер
+                const response = await fetch(`${API_URL}/api/orders/${currentOrderId}/complete-sub`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'X-API-Key': API_KEY
                     },
                     body: JSON.stringify({
-                        order_id: currentOrderId
+                        sub_station_id: 6.1
                     })
                 });
 
