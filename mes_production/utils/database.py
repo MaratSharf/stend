@@ -303,7 +303,15 @@ class Database:
         conn = self.get_connection()
         try:
             order = self.get_order(order_id)
-            if not order or order['status'] != 'production':
+            if not order:
+                return {'success': False, 'message': 'Order not found'}
+            
+            # If order is already completed, return success with completion status
+            if order['status'] == 'completed':
+                self.logger.info(f"Order {order_id} already completed")
+                return {'success': True, 'message': f'Order {order_id} already completed', 'order_completed': True}
+            
+            if order['status'] != 'production':
                 return {'success': False, 'message': 'Order not in production'}
 
             parent = float(int(sub_station_id))
@@ -315,6 +323,10 @@ class Database:
                 completed = set(float(x) for x in order['completed_subs'].split(',') if x.strip())
 
             if sub_station_id in completed:
+                # Sub-station already completed, check if order moved to next station
+                if order['current_station'] != parent:
+                    self.logger.info(f"Sub-station {sub_station_id} already completed, order moved to station {order['current_station']}")
+                    return {'success': True, 'message': f'Sub-station {sub_station_id} already completed. Order at station {order["current_station"]}', 'current_station': order['current_station']}
                 return {'success': False, 'message': 'Sub-station already completed'}
 
             completed.add(sub_station_id)
