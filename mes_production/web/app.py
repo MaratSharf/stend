@@ -911,11 +911,12 @@ def create_app(config: dict = None) -> Flask:
         result = db.complete_sub_station(order_id, sub_id)
         if result['success']:
             logger.info("POST /api/orders/%d/complete-sub %.1f — OK", order_id, sub_id)
+            # Always fetch current order state to show updated status
             order = controller.get_order(order_id)
             result['order'] = order
             return jsonify(result)
         else:
-            logger.warning("POST /api/orders/%d/complete-sub %.1f — FAILED", order_id, sub_id)
+            logger.warning("POST /api/orders/%d/complete-sub %.1f — FAILED: %s", order_id, sub_id, result.get('message', ''))
             return jsonify(result), 400
 
     @app.route('/api/orders/<int:order_id>/scan-result', methods=['POST'])
