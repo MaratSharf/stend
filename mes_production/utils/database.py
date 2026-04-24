@@ -298,7 +298,8 @@ class Database:
             conn.close()
 
     def complete_sub_station(self, order_id: int, sub_station_id: float) -> Dict[str, Any]:
-        """Mark a sub-station as completed for an order."""
+        """Mark a sub-station as completed for an order.
+        If all sub-stations are completed, automatically move order to next station."""
         conn = self.get_connection()
         try:
             order = self.get_order(order_id)
@@ -331,6 +332,51 @@ class Database:
                 VALUES ({ph}, {ph}, {ph}, {ph}, 'SUB_COMPLETED')
             ''', (order_id, sub_station_id, now, now))
 
+            # Check if all sub-stations are completed
+            all_subs = self._sub_stations_of(parent)
+            if all_subs and set(all_subs) == completed:
+                # All sub-stations completed, move order to next station
+                self.logger.info(f"Order {order_id} completed all sub-stations of {parent}, moving to next station")
+                
+                # Find next station
+                next_station = self._next_station_id(parent)
+                if next_station is None:
+                    # No next station, complete the order
+                    cursor.execute(f'''
+                        UPDATE orders SET status = 'completed' WHERE id = {ph}
+                    ''', (order_id,))
+                    conn.commit()
+                    self.logger.info(f"Order {order_id} completed (last station)")
+                    return {'success': True, 'message': f'Sub-station {sub_station_id} completed. Order finished.', 'order_completed': True}
+                
+                # If next station has sub-stations, go to first sub-station
+                next_subs = self._sub_stations_of(next_station)
+                if next_subs:
+                    next_station = min(next_subs)
+                
+                # Update current station
+                cursor.execute(f'''
+                    UPDATE orders SET current_station = {ph}, completed_subs = {ph} WHERE id = {ph}
+                ''', (next_station, '', order_id))
+                
+                # Log station exit and entry
+                exited_at = datetime.now().isoformat()
+                cursor.execute(f'''
+                    UPDATE station_log
+                    SET exited_at = {ph}, result = 'OK'
+                    WHERE order_id = {ph} AND station_id = {ph} AND exited_at IS NULL
+                ''', (exited_at, order_id, parent))
+                
+                entered_at = datetime.now().isoformat()
+                cursor.execute(f'''
+                    INSERT INTO station_log (order_id, station_id, entered_at, result)
+                    VALUES ({ph}, {ph}, {ph}, 'OK')
+                ''', (order_id, next_station, entered_at))
+                
+                conn.commit()
+                self.logger.info(f"Order {order_id} moved from {parent} to {next_station}")
+                return {'success': True, 'message': f'Sub-station {sub_station_id} completed. Order moved to station {next_station}.', 'moved_to': next_station}
+            
             conn.commit()
             self.logger.info(f"Order {order_id} completed sub-station {sub_station_id}")
             return {'success': True, 'message': f'Sub-station {sub_station_id} completed'}
