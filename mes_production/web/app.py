@@ -405,6 +405,13 @@ def create_app(config: dict = None) -> Flask:
         """SVG pipeline tracking page."""
         return render_template('map.html', user=current_user)
 
+    @app.route('/history')
+    @login_required
+    @require_permission('order_view')
+    def history_page():
+        """Order history page - completed and cancelled orders."""
+        return render_template('history.html', user=current_user)
+
     @app.route('/roles')
     @login_required
     @require_permission('role_view')
@@ -784,6 +791,14 @@ def create_app(config: dict = None) -> Flask:
         status = request.args.get('status')
         orders = controller.get_orders(status)
         return jsonify(orders)
+
+    @app.route('/api/orders/history', methods=['GET'])
+    @login_required
+    def api_get_order_history():
+        """Get order history (completed and cancelled orders)."""
+        limit = request.args.get('limit', 100, type=int)
+        history = controller.db.get_order_history(limit)
+        return jsonify(history)
 
     @app.route('/api/stations', methods=['GET'])
     @require_auth_or_api_key

@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}MES - История заказов{% endblock %}
+{% block content %}
+    <div class="filter-section">
+        <h1>📋 История заказов</h1>
+        <button class="btn btn-secondary" onclick="window.location.href='/'">
+            ← Назад к заказам
+        </button>
+    </div>
+
+    <!-- Statistics -->
+    <div class="stats-grid" id="statsGrid">
+        <div class="stat-card">
+            <div class="stat-value" id="statTotal">0</div>
+            <div class="stat-label">Всего в истории</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="statCompleted">0</div>
+            <div class="stat-label">Завершено</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="statCancelled">0</div>
+            <div class="stat-label">Отменено</div>
+        </div>
+    </div>
+
+    <!-- Orders Table -->
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Партия</th>
+                    <th>№ заказа</th>
+                    <th>Код товара</th>
+                    <th>Цвет</th>
+                    <th>Кол-во</th>
+                    <th>Статус</th>
+                    <th>Создан</th>
+                    <th>Запущен</th>
+                    <th>Завершён/Отменён</th>
+                </tr>
+            </thead>
+            <tbody id="historyTableBody">
+                <tr><td colspan="9" style="text-align:center;">Загрузка...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+{% endblock %}
+
+{% block scripts %}
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script>
+        // Order History Module
+        const MESHistory = {
+            init() {
+                this.loadHistory();
+                this.setupRefresh();
+            },
+
+            async loadHistory() {
+                try {
+                    const response = await fetch('/api/orders/history?limit=500');
+                    if (!response.ok) throw new Error('Failed to load history');
+                    const history = await response.json();
+                    this.renderTable(history);
+                    this.updateStats(history);
+                } catch (error) {
+                    console.error('Error loading history:', error);
+                    MESToast.show('Ошибка загрузки истории', 'error');
+                }
+            },
+
+            renderTable(history) {
+                const tbody = document.getElementById('historyTableBody');
+                if (!history || history.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;">История пуста</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = history.map(order => `
+                    <tr class="status-${order.status}">
+                        <td>${this.escapeHtml(order.batch)}</td>
+                        <td><strong>${this.escapeHtml(order.order_number)}</strong></td>
+                        <td>${this.escapeHtml(order.product_code)}</td>
+                        <td>${this.escapeHtml(order.color)}</td>
+                        <td>${order.quantity}</td>
+                        <td>
+                            <span class="status-badge status-${order.status}">
+                                ${this.getStatusLabel(order.status)}
+                            </span>
+                        </td>
+                        <td>${this.formatDate(order.created_at)}</td>
+                        <td>${this.formatDate(order.started_at)}</td>
+                        <td>${this.formatDate(order.completed_at)}</td>
+                    </tr>
+                `).join('');
+            },
+
+            updateStats(history) {
+                const total = history.length;
+                const completed = history.filter(o => o.status === 'completed').length;
+                const cancelled = history.filter(o => o.status === 'cancelled').length;
+
+                document.getElementById('statTotal').textContent = total;
+                document.getElementById('statCompleted').textContent = completed;
+                document.getElementById('statCancelled').textContent = cancelled;
+            },
+
+            getStatusLabel(status) {
+                const labels = {
+                    'completed': '✅ Завершено',
+                    'cancelled': '❌ Отменено'
+                };
+                return labels[status] || status;
+            },
+
+            formatDate(dateStr) {
+                if (!dateStr) return '—';
+                const date = new Date(dateStr);
+                return date.toLocaleString('ru-RU', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            },
+
+            escapeHtml(text) {
+                if (!text) return '';
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            },
+
+            setupRefresh() {
+                // Auto-refresh every 30 seconds
+                setInterval(() => this.loadHistory(), 30000);
+            }
+        };
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            MESHistory.init();
+        });
+    </script>
+{% endblock %}

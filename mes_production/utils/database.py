@@ -478,6 +478,23 @@ class Database:
         finally:
             conn.close()
 
+    def get_order_history(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get completed and cancelled orders (history)."""
+        conn = self.get_connection()
+        try:
+            cursor = self._cursor(conn)
+            ph = self._placeholder()
+            cursor.execute(f'''
+                SELECT * FROM orders 
+                WHERE status IN ('completed', 'cancelled') 
+                ORDER BY completed_at DESC, id DESC 
+                LIMIT {ph}
+            ''', (limit,))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
     def get_order(self, order_id: int) -> Optional[Dict[str, Any]]:
         """Get a single order by ID."""
         conn = self.get_connection()
