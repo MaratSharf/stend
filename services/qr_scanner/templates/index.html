@@ -375,13 +375,17 @@
     </div>
     
     <div class="order-status-container">
-        <h3>📋 Текущий заказ</h3>
+        <h3>📋 Заказы на станции 6.1</h3>
         <div id="order-loading" class="loading">
             <div class="loading-spinner"></div>
-            <div>Загрузка заказа со станции 6.1...</div>
+            <div>Загрузка заказов со станции 6.1...</div>
+        </div>
+        <div id="order-selection" style="display: none;">
+            <div id="orders-list"></div>
         </div>
         <div id="order-status" style="display: none;">
             <div id="order-info"></div>
+            <button id="change-order-btn" style="margin-top: 15px; background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%); color: #fff;">Выбрать другой заказ</button>
         </div>
         <div id="no-order" class="no-order" style="display: none;">
             <div class="no-order-icon">⏸️</div>
@@ -433,9 +437,12 @@
         const stopBtn = document.getElementById('stop-btn');
         const completeBtn = document.getElementById('complete-btn');
         const refreshBtn = document.getElementById('refresh-btn');
+        const changeOrderBtn = document.getElementById('change-order-btn');
         const orderLoadingDiv = document.getElementById('order-loading');
+        const orderSelectionDiv = document.getElementById('order-selection');
         const orderStatusDiv = document.getElementById('order-status');
         const noOrderDiv = document.getElementById('no-order');
+        const ordersListDiv = document.getElementById('orders-list');
         const orderInfoDiv = document.getElementById('order-info');
         const resultDiv = document.getElementById('result');
         const statusDiv = document.getElementById('status');
@@ -448,13 +455,15 @@
         let lastScan = null;
         let currentOrderId = null;
         let currentOrderNumber = null;
+        let availableOrders = [];
 
         let scanHistory = JSON.parse(localStorage.getItem('qrScanHistory')) || [];
         updateHistoryDisplay();
 
-        // Автоматическая загрузка заказа при запуске страницы
+        // Автоматическая загрузка заказов при запуске страницы
         async function loadCurrentOrder() {
             orderLoadingDiv.style.display = 'block';
+            orderSelectionDiv.style.display = 'none';
             orderStatusDiv.style.display = 'none';
             noOrderDiv.style.display = 'none';
             startBtn.disabled = true;
@@ -468,35 +477,23 @@
                 });
 
                 if (!response.ok) {
-                    throw new Error('Failed to fetch current order');
+                    throw new Error('Failed to fetch current orders');
                 }
 
                 const data = await response.json();
 
                 if (data.success) {
-                    if (data.order_id) {
-                        // Заказ найден на станции 6.1
-                        currentOrderId = data.order_id;
-                        currentOrderNumber = data.order_number;
+                    if (data.orders && data.orders.length > 0) {
+                        // Заказы найдены на станции 6.1
+                        availableOrders = data.orders;
                         
-                        if (data.order) {
-                            displayOrderInfo(data.order);
+                        if (data.orders.length === 1) {
+                            // Один заказ - выбираем автоматически
+                            selectOrder(data.orders[0]);
                         } else {
-                            // Показываем базовую информацию
-                            orderInfoDiv.innerHTML = `
-                                <div class="info-item">
-                                    <div class="info-label">Номер заказа</div>
-                                    <div class="info-value">${data.order_number}</div>
-                                </div>
-                            `;
+                            // Несколько заказов - показываем список для выбора
+                            displayOrdersList(data.orders);
                         }
-                        
-                        orderLoadingDiv.style.display = 'none';
-                        orderStatusDiv.style.display = 'block';
-                        statusDiv.textContent = `Заказ ${currentOrderNumber} готов к сканированию`;
-                        statusDiv.className = 'status success';
-                        startBtn.disabled = false;
-                        completeBtn.disabled = false;
                     } else {
                         // Станция пуста
                         orderLoadingDiv.style.display = 'none';
@@ -508,13 +505,66 @@
                     throw new Error(data.message || 'Unknown error');
                 }
             } catch (error) {
-                console.error('Ошибка загрузки заказа:', error);
+                console.error('Ошибка загрузки заказов:', error);
                 orderLoadingDiv.style.display = 'none';
                 noOrderDiv.style.display = 'block';
                 noOrderDiv.querySelector('div:nth-child(2)').textContent = 'Ошибка соединения с MES. ' + error.message;
-                statusDiv.textContent = 'Ошибка загрузки заказа';
+                statusDiv.textContent = 'Ошибка загрузки заказов';
                 statusDiv.className = 'status error';
             }
+        }
+
+        // Отображение списка заказов для выбора
+        function displayOrdersList(orders) {
+            orderLoadingDiv.style.display = 'none';
+            orderSelectionDiv.style.display = 'block';
+            
+            let html = `<p style="margin-bottom: 15px; color: rgba(255,255,255,0.8);">Выберите заказ для работы:</p>`;
+            
+            orders.forEach((order, index) => {
+                html += `
+                    <div class="order-item" style="
+                        background: rgba(255,255,255,0.1);
+                        border: 1px solid rgba(255,255,255,0.2);
+                        border-radius: 8px;
+                        padding: 15px;
+                        margin-bottom: 10px;
+                        cursor: pointer;
+                        transition: all 0.3s ease;
+                    " onmouseover="this.style.background='rgba(0,255,136,0.2)'" onmouseout="this.style.background='rgba(255,255,255,0.1)'" onclick="selectOrder(availableOrders[${index}])">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <div style="font-weight: 600; font-size: 1.1rem; color: #00ff88;">${order.order_number}</div>
+                                <div style="font-size: 0.9rem; color: rgba(255,255,255,0.6); margin-top: 5px;">
+                                    Продукт: ${order.product_code} | Цвет: ${order.color} | Количество: ${order.quantity}
+                                </div>
+                            </div>
+                            <div style="background: rgba(0,255,136,0.2); padding: 5px 10px; border-radius: 4px; color: #00ff88;">
+                                Выбрать →
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            ordersListDiv.innerHTML = html;
+            statusDiv.textContent = `Найдено заказов: ${orders.length}. Выберите заказ для работы`;
+            statusDiv.className = 'status waiting';
+        }
+
+        // Выбор заказа
+        function selectOrder(order) {
+            currentOrderId = order.id;
+            currentOrderNumber = order.order_number;
+            
+            displayOrderInfo(order);
+            
+            orderSelectionDiv.style.display = 'none';
+            orderStatusDiv.style.display = 'block';
+            statusDiv.textContent = `Заказ ${currentOrderNumber} готов к сканированию`;
+            statusDiv.className = 'status success';
+            startBtn.disabled = false;
+            completeBtn.disabled = false;
         }
 
         function displayOrderInfo(order) {
@@ -772,6 +822,16 @@
         stopBtn.addEventListener('click', stopCamera);
         completeBtn.addEventListener('click', completeStation);
         refreshBtn.addEventListener('click', loadCurrentOrder);
+        changeOrderBtn.addEventListener('click', () => {
+            // Возврат к списку заказов для выбора
+            orderStatusDiv.style.display = 'none';
+            orderSelectionDiv.style.display = 'block';
+            displayOrdersList(availableOrders);
+            startBtn.disabled = true;
+            completeBtn.disabled = true;
+            statusDiv.textContent = `Выберите заказ для работы`;
+            statusDiv.className = 'status waiting';
+        });
         clearHistoryBtn.addEventListener('click', clearHistory);
 
         // Автоматическая загрузка заказа при загрузке страницы
