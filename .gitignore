@@ -1,29 +1,40 @@
-```
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
+dist/
+build/
 
 # Logs and temp files
 *.log
 *.tmp
 
-# Environment
+# Environment & Secrets
 .env
 .env.local
 *.env.*
+venv/
+.venv/
+env/
 
 # Editors
 .vscode/
 .idea/
+*.swp
+*~
 
 # Coverage
 .coverage
 coverage/
 htmlcov/
 
-# Testing
+# Testing & Linting
 .pytest_cache/
 .mypy_cache/
-```
+.ruff_cache/
+
+# OS files
+.DS_Store
+Thumbs.db

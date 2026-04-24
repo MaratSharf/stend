@@ -75,6 +75,7 @@ source venv/bin/activate
 ### Шаг 3: Установка зависимостей
 
 ```bash
+cd mes_production  
 pip install -r requirements.txt
 ```
 
