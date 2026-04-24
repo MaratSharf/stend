@@ -49,21 +49,20 @@ def create_app():
                     # Теперь API возвращает 'orders' массив вместо 'order_id'
                     orders = station.get('orders', [])
                     if orders and len(orders) > 0:
-                        # Берём первый заказ (обычно один заказ на подстанции)
-                        order = orders[0]
-                        logger.info(f"Текущий заказ на 6.1: {order.get('order_number')}")
+                        # Возвращаем все заказы на станции для выбора
+                        logger.info(f"На станции 6.1 найдено заказов: {len(orders)}")
                         return jsonify({
                             'success': True,
-                            'order': order,
-                            'order_id': order.get('id'),
-                            'order_number': order.get('order_number')
+                            'orders': orders,
+                            'count': len(orders),
+                            'message': 'Multiple orders available' if len(orders) > 1 else 'Single order available'
                         })
                     
                     # Станция 6.1 пуста
                     return jsonify({
                         'success': True,
-                        'order_id': None,
-                        'order_number': None,
+                        'orders': [],
+                        'count': 0,
                         'message': 'Station 6.1 is idle'
                     })
             
